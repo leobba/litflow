@@ -188,3 +188,10 @@ jobs:
             内容由 `.github/workflows/go-binaries.yml` 的 `update-feed` job 在每次
             打 `v*` tag 时自动覆盖。
           files: upd/update.json
+      # 发布之后回读验证：Release 里的 xpi 必须与仓库源码一致，且清单里的
+      # update_link 真的能下载。这两件事都不会在构建阶段暴露 —— 只有真去拉一次
+      # 才知道。踩过：清单完全合法、地址也能解析，只有 HEAD 那个链接才发现 404。
+      - name: 校验三份副本一致
+        run: |
+          sleep 10   # 等 Release 资产可下载
+          python3 scripts/verify-release.py --repo ${{ github.repository }} --tag ${{ github.ref_name }}
