@@ -60,6 +60,10 @@ Copy-Item 'LICENSE'             $pkg -Force -ErrorAction SilentlyContinue
 
 $readmePkg = Join-Path $Root 'docs\QUICKSTART.md'
 if (Test-Path $readmePkg) { Copy-Item $readmePkg (Join-Path $pkg 'README.md') -Force }
+# 术语表文档也带上：这是个能被用错的功能（表头写错、路径含逗号），
+# 而用错的表现是「静默不生效」。
+$glossaryDoc = Join-Path $Root 'docs\GLOSSARY.md'
+if (Test-Path $glossaryDoc) { Copy-Item $glossaryDoc (Join-Path $pkg 'GLOSSARY.md') -Force }
 
 # ── 4. 说明「包里没有 pdf2zh」──────────────────────────────────────────
 # 用户第一次跑会在日志里看到找不到 pdf2zh_next。与其让他猜，写进包里。
