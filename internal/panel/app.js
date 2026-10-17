@@ -271,11 +271,22 @@ function rateLimitMeta(row, now) {
   const deadline = resetAt || until;
   const remaining = deadline > now ? Math.round((deadline - now) / 1000) : 0;
   if (kind === 'model_unavailable') {
+    // 11102「此后端无此模型」。**这是 (账号, 模型) 维度的负缓存，不是模型坏了。**
+    //
+    // 原来这里写「模型当前不可用」，读起来像这个模型废了 —— 实测就被问过一次：
+    // 账号池显示 cn:hy3「预计 15时23分 后重试」，而翻译照跑不误，因为另一个账号
+    // 有这个模型。措辞必须限定到这个账号，并说清别的账号可能照常提供服务。
     return {
       model,
       kind,
-      detail: remaining ? '预计 ' + dur(remaining) + ' 后重试' : '等待重新探测',
-      title: model + '\n模型当前不可用' + (deadline ? '\n最早重试：' + fmtLocalDateTime(deadline) : ''),
+      detail: remaining ? '本账号 ' + dur(remaining) + ' 后重试' : '本账号等待重新探测',
+      title: [
+        model,
+        '该账号上暂不可用（上游 11102：此后端无此模型）',
+        '这是**账号级**避让，不是模型故障 —— 其它账号若有该模型仍会正常使用。',
+        '该账号对此模型实测成功后会自动解除（见 BlockModelClear）。',
+        deadline ? '最早重试：' + fmtLocalDateTime(deadline) : '',
+      ].filter(Boolean).join('\n'),
     };
   }
   let detail = resetAt
@@ -673,10 +684,16 @@ function rateParts(m) {
     // 划线牌价放在最后，让折后价始终在最左边。
     if (m.credits) out.push({ t: 'strike', s: String(m.credits) });
   } else {
+    // 上游没公布倍率 ≠ 倍率为零。hy4-preview-f 这一行就是空的（上游连
+    // tags 都没给），而它的 -f 兄弟 hy4-preview 有 x0.29。
+    //
+    // 这里曾经只画一个「—」，和「表里没有这一格」长得一样；下拉里更是从我这次
+    // 重构起退化成了裸破折号（原来是「倍率未公布」）。说清楚比留白重要：
+    // 用户看到 — 会以为是我们没拉到数据，而不是上游没公布。
     out.push({
       t: 'rate',
-      s: m.credits ? String(m.credits) : '—',
-      // 有优惠声明但当前都不生效、且这一行的倍率像是折扣派生的。
+      s: m.credits ? String(m.credits) : '倍率未公布',
+      unknown: !m.credits,
       unverified: !!m.rate_unverified,
     });
     if (m.promo_label) out.push({ t: 'active', s: String(m.promo_label) });
@@ -712,15 +729,25 @@ function rateCell(m) {
       return '这个倍率可能来自一段已结束的优惠 —— 上游把折后价写进 credits，' +
         '优惠结束后那一行不会自己改回去。原价无法从上游恢复，请以实际扣费为准。';
     }
+    if (p.t === 'rate' && p.unknown) {
+      return '上游这一行没有公布倍率（不是零）。同族的其它变体可能另有倍率，' +
+        '但那是另一个模型条目，不能替它推断。';
+    }
     return '';
   };
   return parts.map(p => {
     const tip = tipOf(p);
-    const attrs = tip ? ' title="' + esc(tip) + '" style="cursor:help"' : '';
+    // title 与 style 分开给：拼成一个 attrs 字符串再在下面各分支重复写 style，
+    // 会产出**两个 style 属性**，而浏览器只认第一个 —— 颜色就静默失效了。
+    const tAttr = tip ? ' title="' + esc(tip) + '"' : '';
+    const dim = tip ? 'color:var(--ink-3);' : '';
     switch (p.t) {
       case 'rate':
+        if (p.unknown) {
+          return '<span' + tAttr + ' style="' + dim + 'cursor:help">' + esc(p.s) + '</span>';
+        }
         return p.unverified
-          ? '<span' + attrs + ' style="cursor:help;color:var(--ink-3)">?</span> ' + esc(p.s)
+          ? '<span' + tAttr + ' style="' + dim + 'cursor:help">?</span> ' + esc(p.s)
           : (p.strong ? '<b>' + esc(p.s) + '</b>' : esc(p.s));
       case 'active':
         return '<span class="tag ok">' + esc(p.s) + '</span>';
@@ -839,7 +866,20 @@ function mdRowHtml(m, pr) {
   const toggle = '<button class="xs" style="margin-top:4px" data-mdtoggle="' +
     esc(m.id) + '" data-mdnext="' + (m.disabled ? '0' : '1') + '">' +
     (m.disabled ? '启用' : '关闭') + '</button>';
-  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + toggle + '</td>' +
+  // 全池封禁：每个非禁用账号都对这个模型冷却中。
+  //
+  // 这是**唯一**可以说「这个模型现在用不了」的地方。账号行上的 11102 只是那个
+  // 账号的避让 —— 实测被问过一次：那里显示 cn:hy3「15 小时后重试」，而翻译照跑
+  // 不误（另一个账号有这个模型）。两者必须分开说，否则用户以为模型废了。
+  const poolTag = m.pool_blocked
+    ? '<span class="tag bad" title="' + esc(
+      '当前没有任何可用账号能提供这个模型（' + (m.pool_block_count || 0) + ' 个号都在冷却）\n'
+      + (m.pool_block_reason || '原因未知') + '\n'
+      + (m.pool_block_until ? '最早解封：' + fmtLocalDateTime(new Date(m.pool_block_until)) : '解封时间未知')
+      + '\n换一个模型，或等冷却过去。'
+    ) + '">全池暂不可用</span>'
+    : '';
+  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + poolTag + toggle + '</td>' +
     '<td class="num">' + rateCell(m) + '</td>' +
     '<td>' + (m.default_effort ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
     '<td class="efs" style="white-space:normal">' + effs + '</td>' +

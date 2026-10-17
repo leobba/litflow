@@ -200,6 +200,7 @@ process.stdout.write(JSON.stringify({
   rate: rate.detail,
   unavailable: unavailable.detail,
   unknown: unknown.detail,
+  unavailableTitle: unavailable.title,
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "rate-limit-format-*.cjs")
 	if err != nil {
@@ -213,9 +214,39 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("rate-limit formatting node test failed: %v\n%s", err, out)
 	}
-	const want = `{"rate":"预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试","unavailable":"预计 1时00分 后重试","unknown":"预计解封时间未知"}`
-	if strings.TrimSpace(string(out)) != want {
-		t.Fatalf("rate-limit formatting=%s want %s", out, want)
+	var got struct {
+		Rate             string `json:"rate"`
+		Unavailable      string `json:"unavailable"`
+		Unknown          string `json:"unknown"`
+		UnavailableTitle string `json:"unavailableTitle"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("解析 node 输出失败: %v\n原文: %s", err, out)
+	}
+
+	// 账号级限流：照旧。
+	if got.Rate != "预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试" {
+		t.Errorf("限流文案变了：%q", got.Rate)
+	}
+	if got.Unknown != "预计解封时间未知" {
+		t.Errorf("未知重置时间文案变了：%q", got.Unknown)
+	}
+
+	// 11102「此后端无此模型」是**账号级**避让，不是模型故障。
+	//
+	// 实测被问过一次：账号池显示 cn:hy3「预计 15时23分 后重试」，而翻译照跑不误
+	// —— 另一个账号有这个模型。旧文案只说「预计 X 后重试」，读起来像整个模型废了。
+	// 所以断言两件事：文案限定到「本账号」，且悬停里点明别的账号仍可能提供。
+	if !strings.Contains(got.Unavailable, "本账号") {
+		t.Errorf("11102 文案必须限定到「本账号」（否则读起来像模型整体不可用）：%q", got.Unavailable)
+	}
+	if !strings.Contains(got.Unavailable, "1时00分") {
+		t.Errorf("11102 文案仍要给出剩余时间：%q", got.Unavailable)
+	}
+	for _, want := range []string{"其它账号", "账号级"} {
+		if !strings.Contains(got.UnavailableTitle, want) {
+			t.Errorf("11102 的悬停说明必须提到 %q，实际 %q", want, got.UnavailableTitle)
+		}
 	}
 }
 
@@ -1029,8 +1060,16 @@ process.stdout.write(JSON.stringify(out));`
 	if got["plain"] != "x0.11" {
 		t.Errorf("无优惠时应只显示倍率，实际 %q", got["plain"])
 	}
-	if got["empty"] != "\u2014" && got["empty"] != "—" {
-		t.Errorf("无倍率时应显示破折号，实际 %q", got["empty"])
+	// 上游没公布倍率时必须说明白，不能只画一个破折号 —— 那和「我们没拉到数据」
+	// 长得一样。实测 hy4-preview-f 的行里 credits 就是空的（同一族的
+	// hy4-preview 有 x0.29，但不能替它推断）。
+	if !strings.Contains(got["empty"], "倍率未公布") {
+		t.Errorf("无倍率时应说「倍率未公布」而不是空白或破折号，实际 %q", got["empty"])
+	}
+	// 重复的 style 属性会让浏览器只认第一个，颜色静默失效。这条断言很窄但值得：
+	// 它就是上面那个 bug 的形态。
+	if strings.Count(got["empty"], "style=") > 1 {
+		t.Errorf("同一个 span 出现了多个 style 属性，浏览器只认第一个，实际 %q", got["empty"])
 	}
 
 	// 下拉的纯文本形态必须说出同样的信息。用户在**翻译页**选模型，那里只有

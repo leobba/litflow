@@ -196,7 +196,20 @@ func hintForZotero(running, hasPlugin, installed, active bool) string {
 	case !hasPlugin && running:
 		return "Zotero 在运行，但本机没找到插件包（" + pluginFileName + "）。请把它放到网关 exe 同目录。"
 	case running:
-		return "插件包已就绪、Zotero 在运行，但 Zotero 里还没有这个插件。点「下载插件」，在 工具 → 插件 → 齿轮 → Install Add-on From File 里选它，然后重启 Zotero。"
+		// 这一段必须解释一个真实存在的错位：Zotero 运行中、插件列表里却没有它，
+		// 而**菜单里可能还能点**。
+		//
+		// 原因是 bootstrap 插件一旦 startup() 跑过，那个作用域就活在当前窗口里，
+		// 直到 Zotero 重启；从清单里移除并不会把它卸载。所以「清单里没有」和
+		// 「现在按不出菜单」是两件事，而本检测读的是 extensions.json ——
+		// 它描述的是**下次启动**的状态，不是当下活着的代码。
+		//
+		// 不说清楚，用户会以为面板在说谎（实测被问过一次）。
+		return "插件包已就绪、Zotero 在运行，但 Zotero 的插件清单里没有它 —— " +
+			"点「下载插件」，在 工具 → 插件 → 齿轮 → Install Add-on From File 里选它，然后重启 Zotero。" +
+			"注意：如果你之前装过，菜单「工具 → Dual Sync」可能**现在仍然能点、也能跑通**，" +
+			"那是上一次加载的代码还活在 Zotero 进程里。本检测读的是插件清单，描述的是" +
+			"**重启之后**的状态 —— 要让两者一致，重启一次 Zotero。"
 	default:
 		return "插件包已就绪。先启动 Zotero，再点「下载插件」安装，装完重启 Zotero。"
 	}

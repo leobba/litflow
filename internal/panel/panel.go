@@ -376,6 +376,16 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 全池模型封禁：每个非禁用账号都对该模型处于冷却中。
+	//
+	// 为什么必须和账号行上的 11102 分开说：那个是**(账号, 模型)**维度的避让 ——
+	// 一个账号没有这个模型，别的账号照常提供，模型完全可用。只有这里为真时，
+	//「这个模型现在用不了」才成立。
+	//
+	// ModelBlocked 早就写好、也有测试，但一直**没有任何调用方**，于是这句本来
+	// 最该说的话在界面上根本不存在。
+	annotatePoolBlocked(out, p.cfg.Pool.ModelBlocked)
+
 	if len(out) == 0 {
 		if len(fetchErrs) > 0 {
 			writeErr(w, http.StatusBadGateway, "fetch models: "+strings.Join(fetchErrs, "; "))
@@ -385,6 +395,39 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
+}
+
+// annotatePoolBlocked 给模型条目补上「全池封禁」标记。
+//
+// 抽成独立函数只为可测：真正的判据在 pool.ModelBlocked 里（已有测试），这里要
+// 守的是**接线**——条目 id 带 realm 前缀（cn:hy3），而封禁表按裸名（hy3）索引，
+// 少剥一次前缀就永远匹配不上，表现为这个标记永不出现，且没有任何报错。
+func annotatePoolBlocked(out []map[string]any, blocked func(model string) pool.ModelBlockStatus) {
+	if blocked == nil {
+		return
+	}
+	for _, e := range out {
+		id, _ := e["id"].(string)
+		bare := id
+		if i := strings.Index(id, ":"); i >= 0 {
+			bare = id[i+1:]
+		}
+		if bare == "" {
+			continue
+		}
+		st := blocked(bare)
+		if !st.Blocked {
+			continue
+		}
+		e["pool_blocked"] = true
+		e["pool_block_count"] = st.Count
+		if st.Reason != "" {
+			e["pool_block_reason"] = st.Reason
+		}
+		if !st.Until.IsZero() {
+			e["pool_block_until"] = st.Until
+		}
+	}
 }
 
 // panelModelEntry 构造单个模型条目（两域共用）：id 带 realm 前缀（调用值即显示值），
