@@ -387,7 +387,30 @@ func Load(path string) (*Config, error) {
 	if err := c.normalize(); err != nil {
 		return nil, err
 	}
+	// **把相对路径锚定到配置文件所在目录**，而不是进程工作目录。
+	//
+	// 注意：相对路径**不在这里解析**。见 ResolvePaths 的注释 —— 解析会让
+	// 「读出来的配置」和「写回去的配置」不相等，面板保存一次就会把 ./auths
+	// 固化成绝对路径，那份配置从此不能搬目录。运行时在 main 里解析。
 	return c, nil
+}
+
+// ResolvePaths 把配置里的相对路径解析到 base 下，**只在运行时调用**。
+//
+// 刻意不放进 Load：配置页要显示文件里的原样（./auths），而运行时需要绝对路径。
+// 把解析塞进 Load 会让「读出来的配置」和「写回去的配置」不相等，
+// 面板保存一次就会把相对路径固化成绝对路径 —— 那份配置从此不能搬目录。
+//
+// 绝对路径原样保留：那是用户显式指定的，不该被改写。
+func (c *Config) ResolvePaths(base string) {
+	abs := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(base, p)
+	}
+	c.AuthDir = abs(c.AuthDir)
+	c.StateFile = abs(c.StateFile)
 }
 
 // ParseConfigInto 把 JSON 覆盖到 c 上并 normalize（不做 env、不读文件）。

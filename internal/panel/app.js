@@ -3074,6 +3074,32 @@ function trEffectiveRate(m) {
   return pick(m.credits);
 }
 
+/* trStateChip 把状态渲染成徽标。
+   纯文字 'done' / 'running' 在深色表格里几乎看不出区别，而「正在跑」和「已经完了」
+   是这个页面最需要一眼分开的两件事。running 额外带一个呼吸点：静止的数字看起来
+   像卡住，而这个队列是串行的，一篇跑五分钟期间别的任务确实一动不动。 */
+function trStateChip(j) {
+  const map = {
+    running: ['ok', '● 运行中'],
+    queued: ['warn', '○ 排队'],
+    done: ['ok', '✓ 完成'],
+    skipped: ['mute', '— 跳过'],
+    failed: ['bad', '✕ 失败'],
+    cancelled: ['mute', '— 已取消'],
+  };
+  // 两种「完成但不对」必须和 failed 同色：文件在、内容是错的。
+  if (j.produced_nothing || j.partial) {
+    return '<span class="tag bad">' + (j.produced_nothing ? '✕ 无产出' : '! 部分') + '</span>';
+  }
+  const hit = map[j.state] || ['mute', j.state];
+  const pulse = j.state === 'running'
+    ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;'
+      + 'background:var(--ok);margin-right:5px;vertical-align:middle;animation:trpulse 1.4s infinite"></span>'
+    : '';
+  const label = (j.state === 'running' ? '运行中' : hit[1]);
+  return '<span class="tag ' + hit[0] + '">' + pulse + esc(label) + '</span>';
+}
+
 function trRateText(id) {
   const m = TR_MODELS.find(x => x.id === id);
   if (!m) return '';
@@ -3096,6 +3122,19 @@ async function refreshTranslate() {
   const jobs = d.jobs || [];
   const c = d.counts || {};
   const inflight = (c.queued || 0) + (c.running || 0);
+  // 队列统计条。用户说「翻译进度什么的也没有了」—— 单看每一行的 elapsed 无法
+  // 知道「还有几个在等」，这四个数字回答的就是那个问题。
+  // 仍然不给百分比：pdf2zh 管线下不吐阶段信息，百分比只能是编的。
+  const stat = (id, v, cls) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = v;
+    if (cls !== undefined) el.className = 'v' + (cls ? ' ' + cls : '');
+  };
+  stat('trStatRun', c.running || 0, (c.running || 0) > 0 ? 'good' : '');
+  stat('trStatQueued', c.queued || 0, (c.queued || 0) > 0 ? 'warn' : '');
+  stat('trStatDone', c.done || 0, '');
+  stat('trStatFailed', c.failed || 0, (c.failed || 0) > 0 ? 'bad' : '');
   // 链提示随列表响应下发（chain 只在这个接口里）。显示它是为了让用户知道
   //「模型被限流时会自动换下一个」不是猜测，而是配在 config.json 里的事实。
   const chainNote = $('trChainNote');
@@ -3166,7 +3205,7 @@ async function refreshTranslate() {
           : '');
     return `<tr class="${cls}">`
       + `<td title="${esc(j.source)}">${name}</td>`
-      + `<td>${esc(j.state)}</td>`
+      + '<td>' + trStateChip(j) + '</td>'
       + `<td>${esc(j.liveness || '')}</td>`
       + `<td>${tok}</td>`
       + `<td>${note}</td>`

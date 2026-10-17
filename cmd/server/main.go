@@ -72,7 +72,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("load config: %v", err)
 		}
-	}
+	}
+	// 相对路径锚定到配置文件所在目录，而不是进程工作目录。
+	// 不这么做：从快捷方式 / 任务计划 / cmd start / 别的终端启动时，
+	// ./auths 会解析到别处 —— 网关照常起、/health 照常 200，
+	// 但 loaded 0 account(s)，用户只看到空列表且没有任何报错。
+	cfg.ResolvePaths(filepath.Dir(*cfgPath))
 
 	auths, err := auth.LoadDir(cfg.AuthDir)
 	if err != nil {
