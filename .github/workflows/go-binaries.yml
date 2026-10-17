@@ -134,7 +134,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: 构建 Zotero 插件 xpi
-        run: python3 scripts/build-plugin.py --out dist --repo ${{ github.repository }}
+        run: python3 scripts/build-plugin.py --out dist --repo ${{ github.repository }} --tag ${{ github.ref_name }}
       - name: checksums
         run: cd dist && sha256sum *.zip *.tar.gz > checksums.txt && ls -la
       - name: 上一版 tag（compare 链接用）
@@ -172,7 +172,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: 生成 update.json
-        run: python3 scripts/build-plugin.py --out upd --repo ${{ github.repository }}
+        run: python3 scripts/build-plugin.py --out upd --repo ${{ github.repository }} --tag ${{ github.ref_name }}
       - name: 覆盖固定 release tag 的清单
         uses: softprops/action-gh-release@v2
         with:

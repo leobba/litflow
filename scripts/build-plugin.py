@@ -79,7 +79,7 @@ def build(out_dir):
     return out, addon_id, version
 
 
-def write_update_manifest(out_dir, addon_id, version, repo, tag_prefix="v"):
+def write_update_manifest(out_dir, addon_id, version, repo, tag=""):
     """生成发布到固定 `release` tag 的 update.json。
 
     update_url 是**写死在已安装用户设备上**的地址，所以它必须指向一个永远不变的
@@ -92,9 +92,11 @@ def write_update_manifest(out_dir, addon_id, version, repo, tag_prefix="v"):
                 "updates": [
                     {
                         "version": version,
+                        # tag 由调用方给出：xpi 随**网关**的 Release 一起发布，
+                        # 所以这里必须用网关的 tag，而不是插件自己的版本号。
                         "update_link": (
                             f"https://github.com/{repo}/releases/download/"
-                            f"{tag_prefix}{version}/{addon_id}.xpi"
+                            f"{tag}/{addon_id}.xpi"
                         ),
                         "applications": {
                             "zotero": {
@@ -125,11 +127,16 @@ def main():
                     help="owner/repo，用于生成 update.json 里的下载地址")
     ap.add_argument("--no-update", action="store_true",
                     help="只打 xpi，不生成 update.json")
+    ap.add_argument("--tag", default="",
+                    help="xpi 所在 Release 的 tag（默认 v<插件版本>）。"
+                         "与网关一起发版时必须传网关的 tag —— xpi 跟着网关的 Release 走，"
+                         "清单里若写插件版本就会指向一个不存在的资产，而那种 404 是静默的。")
     a = ap.parse_args()
 
     xpi, addon_id, version = build(a.out)
     if not a.no_update:
-        write_update_manifest(a.out, addon_id, version, a.repo)
+        write_update_manifest(a.out, addon_id, version, a.repo,
+                              tag=a.tag.strip() if a.tag else f"v{version}")
 
 
 if __name__ == "__main__":
