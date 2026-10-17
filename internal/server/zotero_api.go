@@ -284,7 +284,7 @@ func (h *Handler) zoteroUpdate(w http.ResponseWriter, r *http.Request) {
 		"addons": map[string]any{
 			"dualsync@zotero.local": map[string]any{
 				"updates": []any{map[string]any{
-					"version":     "1.1.0",
+					"version":     "1.1.1",
 					"update_link": "http://" + r.Host + "/panel/api/zotero/plugin",
 				}},
 			},

@@ -3084,15 +3084,24 @@ async function refreshTranslate() {
       const f = j.dual_pdfs[0];
       note = `<a href="#" data-copy="${esc(f)}" title="${esc(f)}">`
         + esc(f.split(/[\\/]/).pop()) + '</a>';
+      if (j.state === 'skipped') {
+        // 「已跳过」不是失败也不是成功 —— 它是「我发现磁盘上已经有一份译文了」。
+        // 必须把这句话说出来并给一个重译入口，否则用户只看到一行灰字：既不知道
+        // 发生了什么，也没有办法让它真的翻一遍。
+        note = '磁盘上已有这份双语 PDF，因此跳过。' +
+          '<br>想重新翻一遍：把上面的「已有译文」改成「强制重译」再提交，或点右边的按钮。';
+      }
     }
     const tok = (j.token_total === undefined || j.token_total === null || j.token_total < 0)
       ? '—' : Number(j.token_total).toLocaleString();
     const busy = (j.state === 'queued' || j.state === 'running');
     const act = busy
       ? `<button class="xs" data-cancel="${esc(j.id)}">取消</button>`
-      : (j.dual_pdfs || []).length
-        ? `<button class="xs" data-copy="${esc(j.dual_pdfs[0])}">复制路径</button>`
-        : '';
+      : (j.state === 'skipped'
+        ? `<button class="xs primary" data-again="${esc(j.source)}" data-model="${esc(j.model || '')}">重新翻译</button>`
+        : (j.dual_pdfs || []).length
+          ? `<button class="xs" data-copy="${esc(j.dual_pdfs[0])}">复制路径</button>`
+          : '');
     return `<tr class="${cls}">`
       + `<td title="${esc(j.source)}">${name}</td>`
       + `<td>${esc(j.state)}</td>`
@@ -3108,6 +3117,30 @@ async function refreshTranslate() {
     catch (e) { toast('取消失败：' + e.message); }
     TR_LAST_SIG = '';
     refreshTranslate();
+  });
+  // 「重新翻译」：对已跳过的任务强制再跑一次。
+  // 走的是同一个提交端点，只是把 skip_existing 关掉 —— 不新增接口，因为「跳过」
+  // 和「重译」本来就是同一个动作的一个参数，而不是两件事。
+  body.querySelectorAll('[data-again]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    b.textContent = '提交中…';
+    try {
+      await apiRoot('translate', {
+        method: 'POST',
+        body: JSON.stringify({
+          source: b.dataset.again,
+          model: b.dataset.model || 'auto',
+          skip_existing: false,
+        }),
+      });
+      toast('已提交强制重译');
+      TR_LAST_SIG = '';
+      await refreshTranslate();
+    } catch (e) {
+      toast('提交失败：' + e.message);
+      b.disabled = false;
+      b.textContent = '重新翻译';
+    }
   });
   // 复制路径而不是「打开文件」：面板可能被另一台机器打开，在服务器上弹资源管理器
   // 是个只有本机用户才该有的能力，不该从一个 HTTP 请求触发。

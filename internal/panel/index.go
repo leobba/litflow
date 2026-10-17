@@ -47,14 +47,29 @@ func setSecurityHeaders(w http.ResponseWriter) {
 // index 输出面板页面（静态无秘密；数据接口 /panel/api/* 才走鉴权）。
 func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
+	setNoCache(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(indexHTML)
 }
 
+// noCache 禁止客户端缓存面板资源。
+//
+// 这些资源是 go:embed 进二进制的，**每次重新构建都会变**，而 URL 不变。没有这个头，
+// 浏览器按启发式规则缓存 app.js —— 于是「改了前端却看不到变化」会反复出现，而且
+// 现象是上一次的报错原样复现，看起来像修复无效。实测代价：一个前端 bug 修好之后
+// 用户仍看到旧报错，双方都以为没修对。
+//
+// 用 no-cache（每次回源校验）而不是 no-store：本地服务的校验成本可以忽略，而
+// no-store 会让每次切标签页都重传整个 140 KB。
+func setNoCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+}
+
 // appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。
 func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
+	setNoCache(w)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(appJS)
