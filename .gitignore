@@ -57,3 +57,5 @@ litflow.log
 litflow.err
 build/
 upd/
+dist/
+*.xpi.bak-*
