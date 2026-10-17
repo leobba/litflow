@@ -170,7 +170,13 @@ func NewHandler(cfg Config) *Handler {
 	// Zotero 集成：状态与插件下载。走 /panel/api 前缀是因为它们是面板的功能，
 	// 需要 api_key（与其它面板接口同口径）——插件自己不用这两个端点。
 	h.mux.HandleFunc("GET /panel/api/zotero/status", h.withAuth(h.zoteroStatus))
-	h.mux.HandleFunc("GET /panel/api/zotero/plugin", h.withAuth(h.zoteroPlugin))
+	// plugin 用 withQueueAuth 而不是 withAuth：Zotero 的 update_link 自己去拉它，
+	// **不带任何鉴权头**，用 withAuth 会让自动更新必然 401。回环免 key、
+	// 非回环要 key —— 与队列端点同一口径。
+	h.mux.HandleFunc("GET /panel/api/zotero/plugin", h.withQueueAuth(h.zoteroPlugin))
+	// update.json 必须**免鉴权**：Zotero 在安装/更新检查时自己去拉它，不带任何头。
+	// 只暴露一个静态清单，不含账号信息。
+	h.mux.HandleFunc("GET /panel/api/zotero/update.json", h.zoteroUpdate)
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}

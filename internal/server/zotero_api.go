@@ -157,3 +157,44 @@ func itoa64(n int64) string {
 	}
 	return string(buf[i:])
 }
+
+// zoteroUpdate 下发 Zotero 的更新清单。
+//
+// 为什么更新源指向本机网关而不是 GitHub：
+//
+//	manifest 的 applications.zotero.update_url 是**安装时就校验**的字段。
+//	实测这台机器上：原值 `https://example.com/zotero-dual-sync/update.json`
+//	返回 404，Zotero 10 因此拒绝安装——症状是「装完重启，找不到任何菜单」，
+//	而 extensions.json 里连一条记录都没有（被静默移除了）。同一个 profile 里
+//	能正常工作的插件，update_url 全部指向真实存在的地址。
+//
+//	指向本机意味着：只要这个软件在跑，更新源就在。一个 Zotero 插件依赖一个
+//	已废弃的域名，是这个项目最不该有的那种失败。
+//
+// 清单格式（Zotero 扩展更新规范）：
+//
+//	{"addons": {"<id>": {"updates": [{"version","update_link"}]}}}
+func (h *Handler) zoteroUpdate(w http.ResponseWriter, r *http.Request) {
+	// 优先读发行目录里的 update.json，这样插件升级时不用重编网关。
+	if p, err := h.resolvePluginPath(); err == nil {
+		cand := filepath.Join(filepath.Dir(p), "update.json")
+		if raw, err := os.ReadFile(cand); err == nil && len(raw) > 0 {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(raw)
+			return
+		}
+	}
+	// 兜底：内联一份「已是最新」。update_link 指回插件端点，所以即使
+	// 没带 update.json，Zotero 要升级时也能拿到包。
+	writeJSONQ(w, http.StatusOK, map[string]any{
+		"addons": map[string]any{
+			"dualsync@zotero.local": map[string]any{
+				"updates": []any{map[string]any{
+					"version":     "1.1.0",
+					"update_link": "http://" + r.Host + "/panel/api/zotero/plugin",
+				}},
+			},
+		},
+	})
+}
