@@ -157,6 +157,12 @@ type Config struct {
 	// WorkDir 产出与中间文件落在哪。空 = PDF 同目录。
 	WorkDir string `json:"work_dir"`
 
+	// DefaultModel 提交时没带模型用哪个。**不要硬编码 auto**：
+	// Zotero 插件只发 {source}，不带模型 —— 所以这条默认值就是它实际使用的模型。
+	// auto 是网关里唯一不公布倍率、且文档明说会浮动的模型，把它当默认等于
+	// 让「用户在面板里选的模型」永远不生效。实测：用户选了 hy3，请求日志里
+	// 全是 auto。
+	DefaultModel string `json:"default_model"`
 	LangIn  string `json:"lang_in"`
 	LangOut string `json:"lang_out"`
 	QPS     string `json:"qps"`
@@ -231,6 +237,20 @@ func NewQueue(cfg Config, baseURL, apiKey string) *Queue {
 	}
 }
 
+// SetDefaultModel 运行期改默认模型（面板保存时调用，无需重启）。
+func (q *Queue) SetDefaultModel(m string) {
+	q.mu.Lock()
+	q.cfg.DefaultModel = m
+	q.mu.Unlock()
+}
+
+// DefaultModel 当前默认模型。
+func (q *Queue) DefaultModel() string {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return q.cfg.DefaultModel
+}
+
 // SetOnChange 状态变化回调。
 func (q *Queue) SetOnChange(fn func(*Job)) { q.onChange = fn }
 
@@ -277,11 +297,16 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 		return nil, fmt.Errorf("not a PDF: %s", filepath.Base(src))
 	}
 	if outputDir == "" {
-		if q.cfg.WorkDir != "" {
-			outputDir = q.cfg.WorkDir
-		} else {
-			outputDir = filepath.Dir(src)
-		}
+		// **产出默认落在源 PDF 自己旁边**，而不是 WorkDir。
+		//
+		// 这条决定的是「翻译完之后 Zotero 能不能自动挂上附件」：插件的
+		// syncOnce() 是在**条目自己的 storage 目录**里找 *dual.pdf。源文件
+		// 就在那个目录里，所以双语的落点必须和它一致。写到一个统一的
+		// work_dir 里会让插件永远找不到，表现为「翻译成功了但 Zotero 里没附件」。
+		//
+		// WorkDir 仍然是上传件的落点（调用方显式传入），因为上传件没有
+		// 天然的归属目录。
+		outputDir = filepath.Dir(src)
 	}
 	if outputDir, err = filepath.Abs(outputDir); err != nil {
 		return nil, err
@@ -667,7 +692,12 @@ func (q *Queue) buildArgs(job *Job) []string {
 	// 模型名：网关这一侧用 combo 概念时是「自动选车道」，这里统一用 auto。
 	model := job.Model
 	if model == "" || model == "combo:translate-free" {
-		model = "auto"
+		// 回退顺序：调用方指定的 > 配置的默认模型 > auto。
+		// 配置那次回退是本条的目的：插件不带模型，所以它决定了插件实际用什么。
+		model = q.cfg.DefaultModel
+		if model == "" {
+			model = "auto"
+		}
 	}
 
 	args := []string{

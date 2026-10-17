@@ -200,6 +200,10 @@ func (p *Panel) routes() {
 	// /translate（见 queue_api.go），因为面板和 Zotero 插件共用同一套端点。
 	// 面板 JS 直接调根路径，所以这里不需要再挂一份。
 
+	// 本地模型策略：关掉不想看到的模型、设定默认翻译模型。
+	p.mux.HandleFunc("POST /panel/api/models/toggle", p.withAuth(p.modelsToggle))
+	p.mux.HandleFunc("POST /panel/api/translate/default-model", p.withAuth(p.translateDefaultModel))
+
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
 }
@@ -334,6 +338,9 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 // （有错误明细回 502，一个账号都没有回 503）。
 func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0)
+	// 本地关掉的模型也一并返回，前端据此做开关与过滤。
+	// 这条策略只影响本网关的展示与选择，不改上游目录。
+	disabledSet := p.disabledModels()
 	var fetchErrs []string
 
 	// CN 域：有可用 CN 账号才查（此前无条件 Pool.Pick()+FetchModels——选中 global
@@ -345,7 +352,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 				fetchErrs = append(fetchErrs, "cn: "+err.Error())
 			} else {
 				for _, mi := range infos {
-					out = append(out, panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP))
+					out = append(out, markDisabled(panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP), disabledSet))
 				}
 			}
 		}
@@ -362,7 +369,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 				} else {
 					efforts, defaults := p.cfg.Upstream.GlobalEffortSnapshot()
 					for _, mi := range infos {
-						out = append(out, panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP))
+						out = append(out, markDisabled(panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP), disabledSet))
 					}
 				}
 			}

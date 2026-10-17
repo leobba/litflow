@@ -198,7 +198,18 @@ type Config struct {
 		//
 		// 配了链就按顺序换模型（每次换仍会重新选号）；空链 = 零行为变化。
 		Chain []string `json:"chain"`
+		// DefaultModel 提交未带模型时的默认模型。Zotero 插件只发 {source}，
+		// 所以这一项就是它实际使用的模型 —— 留空会退回 auto（倍率浮动）。
+		DefaultModel string `json:"default_model"`
 	} `json:"translate"`
+
+	// Models 模型目录的本地策略（只影响本网关的展示与选择，不改上游目录）。
+	Models struct {
+		// Disabled 被用户关掉的模型 id。关掉的不会出现在翻译模型下拉里。
+		// 用一个列表而不是给每个模型加布尔字段：模型目录来自上游、会变，
+		// 而「关掉哪些」是本地决定 —— 两者分开存，上游增删模型时本地选择不受影响。
+		Disabled []string `json:"disabled"`
+	} `json:"models"`
 
 	Upstash struct {
 		URL   string `json:"url"`   // 空 = 纯内存模式；支持完整 rediss:// URL 或 https://xxx.upstash.io host
