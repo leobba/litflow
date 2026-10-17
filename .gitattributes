@@ -1,0 +1,27 @@
+# 让所有文本文件在**任何平台**上都是 LF。
+#
+# 为什么必须有这个文件：没有它时，Windows 的 core.autocrlf=true 会把检出写成
+# CRLF，于是 `gofmt -l .` 报出 152 个「未格式化」文件 —— 全是行尾假象（把其中一个
+# 文件转成 LF 再测，gofmt 立刻干净）。后果是这台机器上的格式化检查**永久失效**，
+# 同时每次提交都刷 "LF will be replaced by CRLF" 的警告。
+#
+# CI 是 Linux，本来就是 LF。这条规则只是把本地拉到与 CI 同一个口径。
+* text=auto eol=lf
+
+# Windows 脚本保持 CRLF。
+#   .cmd/.bat：批处理在某些情形下对 LF 的 goto/label 解析会出错。
+#   .ps1：PowerShell 本身两种都能读，但用户可能用记事本/老编辑器打开，
+#         CRLF 是那个环境里的预期。
+# 注意：这些文件带 UTF-8 BOM（PowerShell 5.1 读无 BOM 的中文 .ps1 会按 GBK
+# 解析）。git 不碰 BOM，只改行尾，两者互不影响。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制：不能被当文本处理，否则会损坏内容或产生永远消不掉的 diff。
+*.png binary
+*.xpi binary
+*.zip binary
+*.pdf binary
+*.exe binary
+*.ico binary
