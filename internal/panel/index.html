@@ -1162,6 +1162,21 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </div>
         </div>
 
+          <div class="box">
+            <header><h3>PDF 翻译</h3></header>
+            <div class="pad">
+              <label class="fld"><span class="lb">pdf2zh 可执行文件</span>
+                <input name="pdf2zh_exe" placeholder="留空 = 从 PATH 查找 pdf2zh_next">
+                <span class="hint">中文路径也可以。装法：<code>pip install pdf2zh-next</code>；
+                  不填就从 PATH 找。改完「翻译」页会立刻显示引擎是否可用。</span></label>
+              <label class="fld" style="margin-top:10px"><span class="lb">用户术语表（CSV 路径）</span>
+                <input name="glossaries" placeholder="D:\workbuddy2api\data\glossaries\a.csv, D:\...\b.csv">
+                <span class="hint">多个用逗号分隔。<b>路径里不能有逗号</b> —— 逗号是 pdf2zh 的分隔符。
+                  格式为 <code>source,target</code> 的 CSV，零额外请求，不影响限流。
+                  详见包内的 <code>GLOSSARY.md</code>。</span></label>
+            </div>
+          </div>
+
         <div class="savebar">
           <span class="grow"></span>
           <span class="restart-note" id="cfgNote"></span>

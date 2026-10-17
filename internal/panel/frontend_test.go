@@ -2,6 +2,7 @@ package panel
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -780,6 +781,117 @@ process.stdout.write(JSON.stringify([
 // 输入（余额高的到期最晚、global 余额最低），若前端不重排就会保持该顺序而失败。
 //
 // 日期按「今天 +N 天」生成而不是写死：写死的话过了那天用例就会自己失效。
+// TestAppJSCollectConfigArrayAndClearable 数组型与可清空字段的语义。
+//
+// 这两条守的都是「面板说已保存、配置其实没变」：
+//
+//  1. glossaries 是 []string。清空输入框时若走「空 = 不下发」，用户删光内容
+//     再保存，配置里会原样保留旧的术语表 —— 而界面上那一栏确实是空的。
+//     所以空必须发 []，不是 ""（"" 会让后端解析 []string 失败）。
+//
+//  2. pdf2zh_exe 清空是**有意义的**（= 改用 PATH 查找）。它必须走 CLEARABLE_CFG
+//     那条「空串照发」的路，否则用户永远无法从「配置指定」切回「PATH 查找」——
+//     只能去手改 config.json，而这正是这个表单要消除的动作。
+func TestAppJSCollectConfigArrayAndClearable(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; collectConfig test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('const CFG_MAP');
+const end = src.indexOf('/* Go 时长字段即时校验');
+if (start < 0 || end < 0 || end < start) throw new Error('collectConfig region not found');
+
+function run(gloss, exe) {
+  const mk = v => ({ type: 'text', value: v });
+  const cfgForm = { elements: {
+    glossaries: mk(gloss),
+    pdf2zh_exe: mk(exe),
+  }};
+  const ctx = {
+    Number, String, Math, Map, Array, Object, isNaN, Set,
+    document: { getElementById: () => cfgForm },
+    $: () => cfgForm,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src.slice(start, end) + '\nthis.collectConfig = collectConfig;', ctx);
+  return ctx.collectConfig();
+}
+
+const filled = run('D:\\g\\a.csv, D:\\g\\b.csv', 'D:\\pdf2zh\\pdf2zh_next.exe');
+const cleared = run('', '');
+const one = run('  D:\\g\\only.csv  ', '');
+
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
+process.stdout.write(JSON.stringify({
+  filledGloss: (filled.translate || {}).glossaries,
+  filledExe: (filled.translate || {}).pdf2zh_exe,
+  clearedGlossPresent: has(cleared.translate, 'glossaries'),
+  clearedGlossValue: (cleared.translate || {}).glossaries,
+  clearedExePresent: has(cleared.translate, 'pdf2zh_exe'),
+  clearedExeValue: (cleared.translate || {}).pdf2zh_exe,
+  oneGloss: (one.translate || {}).glossaries,
+  oneExePresent: has(one.translate, 'pdf2zh_exe'),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "cfga-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("collectConfig node test failed: %v\n%s", err, out)
+	}
+
+	var got struct {
+		FilledGloss        []string `json:"filledGloss"`
+		FilledExe          string   `json:"filledExe"`
+		ClearedGloss       bool     `json:"clearedGlossPresent"`
+		ClearedGlossVal    []string `json:"clearedGlossValue"`
+		ClearedExePresent  bool     `json:"clearedExePresent"`
+		ClearedExeValue    string   `json:"clearedExeValue"`
+		OneGloss           []string `json:"oneGloss"`
+		OneExePresent      bool     `json:"oneExePresent"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("解析 node 输出失败: %v\n原文: %s", err, out)
+	}
+
+	// 填了：拆成数组，且首尾空白被去掉
+	if len(got.FilledGloss) != 2 || got.FilledGloss[0] != `D:\g\a.csv` || got.FilledGloss[1] != `D:\g\b.csv` {
+		t.Errorf("glossaries 应拆成 2 项且去空白，实际 %#v", got.FilledGloss)
+	}
+	if got.FilledExe != `D:\pdf2zh\pdf2zh_next.exe` {
+		t.Errorf("pdf2zh_exe 应原样发出，实际 %q", got.FilledExe)
+	}
+
+	// 清空 glossaries：必须发 []，不能不发
+	if !got.ClearedGloss {
+		t.Error("清空 glossaries 必须仍然下发（空数组）—— 否则旧的术语表会被保留，而界面上那一栏是空的")
+	}
+	if len(got.ClearedGlossVal) != 0 {
+		t.Errorf("清空时应发空数组，实际 %#v", got.ClearedGlossVal)
+	}
+
+	// 清空 pdf2zh_exe：必须发空串（= 改用 PATH）
+	if !got.ClearedExePresent {
+		t.Error("清空 pdf2zh_exe 必须下发空串，否则用户无法从「配置指定」切回「PATH 查找」")
+	}
+	if got.ClearedExeValue != "" {
+		t.Errorf("清空时应发空串，实际 %q", got.ClearedExeValue)
+	}
+
+	// 单条：数组长度为 1（不是被当字符串发出去）
+	if len(got.OneGloss) != 1 || got.OneGloss[0] != `D:\g\only.csv` {
+		t.Errorf("单条术语表应为长度 1 的数组且去空白，实际 %#v", got.OneGloss)
+	}
+}
+
 func TestAppJSExpirySortedByExpiry(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

@@ -1036,6 +1036,10 @@ const CFG_MAP = {
   sanitize_blacklist_fingerprints: ['features', 'sanitize_blacklist_fingerprints'],
   session_sticky_enabled: ['session_sticky', 'enabled'],
   request_client_info: ['logging', 'request_client_info'],
+  // 翻译引擎与术语表。这两项原先只能手改 config.json，而它们恰好是新装用户
+  // 最需要改的两项：装了 pdf2zh 要指路径，想提术语一致性要加表。
+  pdf2zh_exe: ['translate', 'pdf2zh_exe'],
+  glossaries: ['translate', 'glossaries'],
 };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
@@ -1048,7 +1052,19 @@ const CFG_MAP = {
  * 刻意不含 api_key：清空它 = 关闭整个鉴权，误触代价是网关变成无鉴权公开服务。
  * 该字段（以及提示文案"留空 = 不鉴权"与现状不符的问题）单独处理。
  */
-const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file']);
+const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file', 'pdf2zh_exe']);
+
+/* 「数组型」字段：界面上是逗号分隔的一行文本，配置里是 []string。
+ *
+ * 必须显式声明并拆分。否则 collectConfig 会把字符串原样发过去，后端收到
+ * {"glossaries": "a.csv, b.csv"} 会拒绝 —— 而面板显示「已保存」，
+ * 用户以为生效了。
+ *
+ * 分隔符必须与 loadConfig 的 v.join(', ') 一致，否则刷新后会变成「一条」。
+ * 术语表路径里的逗号本就被后端拒绝（逗号是 pdf2zh 自己的分隔符），
+ * 所以用逗号不会丢失任何合法输入。
+ */
+const ARRAY_CFG = new Set(['glossaries']);
 
 function dig(obj, path) { return path.reduce((o, k) => (o == null ? undefined : o[k]), obj); }
 function put(obj, path, val) {
@@ -1085,8 +1101,16 @@ function collectConfig() {
     else if (el.type === 'number') { v = el.value.trim() === '' ? undefined : Number(el.value); }
     else {
       const raw = el.value.trim();
+      // 数组型字段要先判空：清空它**是有意义的**（= 不要任何术语表）。
+      // 如果落进下面的「空 = 不下发」分支，用户删光内容再保存，配置里会
+      // 原样保留旧的术语表 —— 面板说「已保存」，内容却还是老的。
+      //
+      // 而且必须发 []，不能发 ""：后端这一项是 []string，空串会直接解析失败。
+      if (ARRAY_CFG.has(name)) {
+        v = raw === '' ? [] : raw.split(',').map(x => x.trim()).filter(Boolean);
+      }
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
-      if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
+      else if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
       else v = raw;
     }
