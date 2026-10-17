@@ -50,6 +50,22 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
 }
+/* apiRoot 调**根路径**端点（不带 /panel/api 前缀）。
+   翻译队列放在根路径上，因为面板和 Zotero 插件共用同一套端点 —— 一套接口
+   只维护一次。回环来源不需要 key，但仍然带上（带了不影响）。
+   与 api() 分成两个函数而不是加一个开关参数：`/panel/api/` 是一条真实的边界
+   （面板接口要 key、队列接口回环免 key），做成默认参数会让「这一行到底打到
+   哪」在读代码时看不出来。 */
+async function apiRoot(path, opts = {}) {
+  const h = Object.assign({}, opts.headers || {});
+  const k = localStorage.getItem(LS_KEY);
+  if (k) h['Authorization'] = 'Bearer ' + k;
+  if (opts.body && typeof opts.body === 'string') h['Content-Type'] = 'application/json';
+  const r = await fetch('/' + path, Object.assign({}, opts, { headers: h }));
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+  return d;
+}
 function toast(msg, cls) {
   const el = document.createElement('div');
   el.className = 'tst ' + (cls || '');
@@ -3185,13 +3201,20 @@ async function refreshZotero() {
   try {
     const d = await api('zotero/status');
     const running = !!d.zotero_running, has = !!d.plugin_present;
+    const installed = !!d.plugin_installed, active = !!d.plugin_active;
     gate.textContent = '网关地址 ' + (d.gateway_url || '');
-    state.textContent = (running ? '● Zotero 运行中' : '○ Zotero 未运行')
-      + ' · ' + (has ? '插件包已就绪' : '插件包缺失');
-    state.style.color = (running && has) ? '#1a7f37' : (running ? '#9a6700' : '#57606a');
+    // 状态行按「用户最关心什么」排序：插件装没装 > Zotero 在不在 > 安装包在不在。
+    // 此前只报「插件包已就绪」—— 而那件事成立、插件却没装，正是最误导的组合。
+    const parts = [];
+    parts.push(installed ? (active ? '● 插件已安装并启用' : '● 插件已安装但未启用') : '○ 插件未安装');
+    parts.push(running ? 'Zotero 运行中' : 'Zotero 未运行');
+    if (!has) parts.push('安装包缺失');
+    state.textContent = parts.join(' · ');
+    state.style.color = (installed && active) ? '#1a7f37' : (installed ? '#9a6700' : '#57606a');
     hint.textContent = d.hint || '';
     const btn = $('btnZtDownload');
-    if (btn) btn.disabled = !has;
+    // 装好了把按钮文案改掉：留着一个「下载插件」会让人以为还没装。
+    if (btn) { btn.disabled = !has; btn.textContent = installed ? '重新下载插件' : '下载插件'; }
   } catch (e) {
     state.textContent = '读取失败：' + e.message;
     state.style.color = '#cf222e';

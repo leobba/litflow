@@ -19,6 +19,7 @@ package server
 // 「傻瓜式」交还给资源管理器。面板里点一下就能下载，装完刷新即用。
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -81,6 +82,7 @@ func (h *Handler) zoteroStatus(w http.ResponseWriter, r *http.Request) {
 	path, err := h.resolvePluginPath()
 	hasPlugin := err == nil
 	running := zoteroRunning()
+	installed, active := zoteroPluginState()
 	// 网关地址：插件要把 prefs.js 里的 litflowUrl 指到这里。
 	// 用请求的 Host 而不是写死 127.0.0.1，因为面板可能从另一台机器打开。
 	host := r.Host
@@ -88,30 +90,115 @@ func (h *Handler) zoteroStatus(w http.ResponseWriter, r *http.Request) {
 		host = "127.0.0.1:7863"
 	}
 	writeJSONQ(w, http.StatusOK, map[string]any{
-		"zotero_running": running,
-		"plugin_present": hasPlugin,
-		"plugin_name":    "",
-		"gateway_url":    "http://" + host,
-		"expected_url":   "http://127.0.0.1:7863",
-		"hint": hintForZotero(running, hasPlugin),
-		"plugin_file":    filepath.Base(path),
+		"zotero_running":   running,
+		"plugin_present":   hasPlugin,
+		"plugin_installed": installed,
+		"plugin_active":    active,
+		"gateway_url":      "http://" + host,
+		"expected_url":     "http://127.0.0.1:7863",
+		"hint":             hintForZotero(running, hasPlugin, installed, active),
+		"plugin_file":      filepath.Base(path),
 	})
+}
+
+// pluginID 与 manifest 的 applications.zotero.id 必须一致。
+const pluginID = "dualsync@zotero.local"
+
+// zoteroPluginState 读 Zotero 自己的 extensions.json，判断插件是否已安装。
+//
+// 为什么值得做：面板此前只能说「Zotero 在运行」和「我手上有安装包」—— 而这两件
+// 都成立、插件却没装的情况，正是我们花了四轮才排掉的那个状态。用户看到「插件包
+// 已就绪」会以为装好了，实际 Zotero 里什么都没有。
+//
+// 读扩展数据库是只读的；Zotero 运行中它也已经持有上一次的落盘内容，所以不要求
+// Zotero 关闭。读不到一律返回 false —— 那表示「不知道」，而调用方要把它与
+// 「确实没装」区分开（见 hint 的分支）。
+func zoteroPluginState() (installed, active bool) {
+	for _, prof := range zoteroProfileDirs() {
+		raw, err := os.ReadFile(filepath.Join(prof, "extensions.json"))
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Addons []struct {
+				ID     string `json:"id"`
+				Active bool   `json:"active"`
+				// Zotero 把「被禁用」拆成两个来源：用户关的，以及应用判定不兼容
+				// 而关的。后者才说明这个包有问题，所以两个都读。
+				AppDisabled bool `json:"appDisabled"`
+			} `json:"addons"`
+		}
+		if json.Unmarshal(raw, &doc) != nil {
+			continue
+		}
+		for _, a := range doc.Addons {
+			if a.ID == pluginID {
+				return true, a.Active && !a.AppDisabled
+			}
+		}
+	}
+	return false, false
+}
+
+// zoteroProfileDirs 找 Zotero profile 目录。
+//
+// 先读 profiles.ini（权威来源），读不到再扫 Profiles/ 兜底。
+func zoteroProfileDirs() []string {
+	appdata := os.Getenv("APPDATA")
+	if appdata == "" {
+		return nil
+	}
+	base := filepath.Join(appdata, "Zotero", "Zotero")
+	var out []string
+	if raw, err := os.ReadFile(filepath.Join(base, "profiles.ini")); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "Path=") {
+				continue
+			}
+			rel := strings.TrimSpace(strings.TrimPrefix(line, "Path="))
+			// ini 里写的是正斜杠；FromSlash 让 Windows 上也能解析。
+			p := filepath.Join(base, filepath.FromSlash(rel))
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				out = append(out, p)
+			}
+		}
+	}
+	if len(out) == 0 {
+		if entries, err := os.ReadDir(filepath.Join(base, "Profiles")); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				p := filepath.Join(base, "Profiles", e.Name())
+				if _, err := os.Stat(filepath.Join(p, "prefs.js")); err == nil {
+					out = append(out, p)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // hintForZotero 一句人话，直接告诉用户下一步做什么。
 //
-// 「傻瓜式」的实质就在这里：不是把状态摆出来让人自己推，而是把**下一步**
-// 说出来。四种组合对应四条不同的动作。
-func hintForZotero(running, hasPlugin bool) string {
+// 「傻瓜式」的实质就在这里：不是把状态摆出来让人自己推，而是把**下一步**说出来。
+// 每条组合对应一个不同的动作，尤其是「装了但没启用」—— 那一条此前完全看不到，
+// 而它的表现（没有菜单）和「没装」一模一样。
+func hintForZotero(running, hasPlugin, installed, active bool) string {
 	switch {
+	case installed && active:
+		return "插件已安装并启用。在文献列表里选中条目，然后 工具 → 「Dual Sync：翻译选中条目」。"
+	case installed && !active:
+		return "插件已安装，但在 Zotero 里未启用（或已被停用）。到 Zotero → 工具 → 插件 里启用 Zotero Dual Sync，然后重启 Zotero。"
 	case !hasPlugin && !running:
 		return "没找到插件包（" + pluginFileName + "）。请把它放在网关 exe 同目录，然后刷新本页。"
 	case !hasPlugin && running:
 		return "Zotero 在运行，但本机没找到插件包（" + pluginFileName + "）。请把它放到网关 exe 同目录。"
-	case hasPlugin && !running:
-		return "插件包已就绪。先启动 Zotero，再点下面的「下载插件」，在 Zotero 里安装。"
+	case running:
+		return "插件包已就绪、Zotero 在运行，但 Zotero 里还没有这个插件。点「下载插件」，在 工具 → 插件 → 齿轮 → Install Add-on From File 里选它，然后重启 Zotero。"
 	default:
-		return "插件包已就绪、Zotero 在运行。点「下载插件」，在 Zotero 的 工具 → 插件 → 齿轮 → Install Add-on From File 里选它，然后重启 Zotero。"
+		return "插件包已就绪。先启动 Zotero，再点「下载插件」安装，装完重启 Zotero。"
 	}
 }
 
