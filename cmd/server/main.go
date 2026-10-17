@@ -296,6 +296,10 @@ func main() {
 			selfURL = "http://127.0.0.1" + cfg.Listen + "/v1"
 		}
 		tq = translate.NewQueue(tcfg, selfURL, cfg.APIKey)
+		// 历史任务落盘。放在 state 文件旁边，和其它运行期数据同一处。
+		// 必须在 Start() 之前：恢复出来的 queued 任务要靠 Start 起 worker 才会跑。
+		tq.SetPersistPath(stateSibling(cfg.StateFile, "jobs.json"))
+
 		tq.SetOnChange(func(j *translate.Job) {
 			// 只在终态打一行：翻译一篇是几百个请求，逐阶段打印会把日志淹掉。
 			switch j.State {

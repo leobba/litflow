@@ -210,6 +210,12 @@ type Queue struct {
 	// running 在飞进程，让 Cancel 能真停掉它而不是只标记。
 	running map[string]*exec.Cmd
 
+	// persistPath 历史任务落盘文件。空 = 只活在这个进程里。
+	//
+	// 队列原本纯内存，一次重启就抹掉全部在飞与历史任务。对「300 页的书跑
+	// 一小时」这种用法是硬伤：重启后任务消失，而插件还在轮询一个不存在的 id。
+	persistPath string
+
 	pending chan string
 	stop    chan struct{}
 	wg      sync.WaitGroup
@@ -356,6 +362,7 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 	q.mu.Unlock()
 	q.changed(job)
 
+	q.saveAsync()
 	select {
 	case q.pending <- job.ID:
 	case <-q.stop:
@@ -437,6 +444,7 @@ func (q *Queue) Cancel(id string) bool {
 	if changed {
 		q.changed(j)
 	}
+	q.saveAsync()
 	if cmd != nil && cmd.Process != nil {
 		// 在 goroutine 里杀：Kill 会等进程退出，不该拖住 HTTP 处理。
 		go func() { _ = cmd.Process.Kill() }()
@@ -566,6 +574,8 @@ func (q *Queue) finish(job *Job, state, msg string, duals []string, tokens int64
 
 	// 回调在锁外：观察者可能反过来查队列，持锁调用就会自锁。
 	q.changed(job)
+	// 终态必须落盘：这是历史记录唯一有价值的时刻。
+	q.saveAsync()
 }
 
 // spawn 组命令行并跑 pdf2zh，保留输出尾部。
