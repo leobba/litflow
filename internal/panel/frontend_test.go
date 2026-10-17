@@ -906,11 +906,11 @@ func TestAppJSRateCellPromotions(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-// 只切 rateCell 本身。切到 esc 会带进这之间所有**顶层语句**（面板初始化代码
-// 要碰 DOM），在无 DOM 的 vm 里一执行就 ReferenceError: $ is not defined。
-const start = src.indexOf('function rateCell(');
+// 从 rateParts 起切：rateCell 依赖它，只切 rateCell 会 ReferenceError。
+// 切到 loadModels 之前，避免带进碰 DOM 的顶层语句。
+const start = src.indexOf('function rateParts(');
 const end = src.indexOf('async function loadModels');
-if (start < 0 || end < 0 || end < start) throw new Error('rateCell region not found');
+if (start < 0 || end < 0 || end < start) throw new Error('rateParts region not found');
 const ctx = {
   String, Array, Object, Number, isNaN, RegExp,
   // esc 是最简单的 HTML 转义，用桩替掉，免得为此扩大切片范围。
@@ -919,8 +919,9 @@ const ctx = {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.rateCell = rateCell;', ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.rateCell = rateCell; this.rateText = rateText;', ctx);
 const R = ctx.rateCell;
+const T = ctx.rateText;
 const out = {
   // 生效的限时免费：生效价 0x + 免费标签 + 划线牌价
   activeFree: R({ credits: 'x0.79', promo_factor: 0, promo_credits: '0x', promo_label: '限时免费' }),
@@ -953,6 +954,18 @@ const out = {
   plain: R({ credits: 'x0.11' }),
   // 无倍率且无任何优惠
   empty: R({}),
+  // 下拉用的是纯文本形态（<option> 放不了 HTML）。两条必须说同样的信息，
+  // 否则「模型页看得见、翻译页看不见」—— 而用户是在翻译页选模型的。
+  textNight: T({
+    credits: 'x0.29',
+    rate_unverified: true,
+    promo_decls: [{ label: '夜间免费', active: false, expired: false, window: '23:00-08:00', factor: 0 }],
+  }),
+  textExpired: T({
+    credits: 'x0.08',
+    promo_decls: [{ label: '限时折扣', active: false, expired: true }],
+  }),
+  textActiveFree: T({ credits: 'x0.79', promo_factor: 0, promo_credits: '0x', promo_label: '限时免费' }),
 };
 process.stdout.write(JSON.stringify(out));`
 	f, err := os.CreateTemp(t.TempDir(), "rate-*.cjs")
@@ -1018,6 +1031,25 @@ process.stdout.write(JSON.stringify(out));`
 	}
 	if got["empty"] != "\u2014" && got["empty"] != "—" {
 		t.Errorf("无倍率时应显示破折号，实际 %q", got["empty"])
+	}
+
+	// 下拉的纯文本形态必须说出同样的信息。用户在**翻译页**选模型，那里只有
+	// <option>，放不了 HTML —— 如果 rateText 丢掉优惠信息，就成了「模型页看得见、
+	// 翻译页看不见」，而后者才是决定这篇论文花多少积分的地方。
+	tn := got["textNight"]
+	for _, want := range []string{"x0.29", "夜间免费", "23:00-08:00", "到点免费"} {
+		if !strings.Contains(tn, want) {
+			t.Errorf("下拉文本必须含 %q，实际 %q", want, tn)
+		}
+	}
+	if strings.Contains(tn, "<") {
+		t.Errorf("下拉文本不能带 HTML —— <option> 会把它当字面量显示，实际 %q", tn)
+	}
+	if !strings.Contains(got["textExpired"], "已结束") {
+		t.Errorf("下拉文本必须说明优惠已结束，实际 %q", got["textExpired"])
+	}
+	if !strings.Contains(got["textActiveFree"], "免费") {
+		t.Errorf("生效的限时免费在下拉里要说「免费」，实际 %q", got["textActiveFree"])
 	}
 }
 

@@ -644,62 +644,96 @@ function outCell(m, pr) {
  * 整个丢掉、只显示「倍率未知」，理由是「留白会被读成免费」；我们改标注而保留数字，
  * 因为用户要的是信息量 —— 但标注必须显眼，否则等于没标。
  */
-function rateCell(m) {
+/* rateParts 倍率该说什么 —— **单一来源**。
+ *
+ * 为什么抽出来：模型页的倍率列和翻译页的模型下拉是同一个事实的两个渲染面。
+ * 分开写必然漂移，而这里漂移的后果具体：翻译下拉里 `cn:hy4-preview  x0.29`
+ * 不带任何优惠信息，而用户恰恰是在那里选模型 —— 翻译要跑几分钟，知道
+ *「23:00 起免费」是有用的。
+ *
+ * 返回 [{t, s}]：t 是语义（rate/strike/active/free/idle/freeat/expired），
+ * 由各自的渲染器决定怎么画。表格用彩色 tag，<option> 只能纯文本。
+ *
+ * 「生效价 / 未生效 / 已过期」必须三态分明：
+ *   生效中   → 折后价大字 + 徽章 + 划线牌价
+ *   时段外   → 牌价 + 「夜间免费 23:00-08:00」+「到点免费」
+ *   已过期   → 牌价 + 「限时折扣 已结束」
+ *   倍率可疑 → 数字打 ?，说明它可能是已结束优惠的残留
+ */
+function rateParts(m) {
   const decls = Array.isArray(m.promo_decls) ? m.promo_decls : [];
-  const idleDecls = decls.filter(d => !d.active);
+  const idle = decls.filter(d => !d.active);
+  const hasActiveRate = m.promo_factor != null && !!m.promo_credits;
+  const out = [];
 
-  // 1) 有生效折扣且有机器可读的折后价 → 生效价（原行为）
-  if (m.promo_factor != null && m.promo_credits) {
-    const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
-    const base = m.credits ? ' <s style="color:var(--ink-3);font-size:11.5px">' + esc(m.credits) + '</s>' : '';
-    const label = m.promo_label ? ' <span class="tag ok">' + esc(m.promo_label) + '</span>' : '';
-    const free = m.promo_factor === 0 ? ' <span class="tag ok">免费</span>' : '';
-    return '<span' + tip + ' style="cursor:help"><b>' + esc(m.promo_credits) + '</b>' + label + free + base + '</span>';
-  }
-
-  // 2) 有生效优惠但无 factor（错峰类，折扣数字只在 hover 文案里）→ 牌价 + 标签。
-  //    注意**不要在这里 return**：这一类模型往往还挂着另一条时段性优惠
-  //    （实测 glm-5.2：当前「错峰使用」生效，同时有一条 23:00-7:50 的五折）。
-  //    提前 return 会让用户看不到「夜里五折」—— 和只显示 x0.29 是同一个毛病。
-  let out = '';
-  if (m.promo_label) {
-    const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
-    out = '<span' + tip + ' style="cursor:help">' + (m.credits ? esc(m.credits) : '—') +
-      ' <span class="tag warn">' + esc(m.promo_label) + '</span></span>';
+  if (hasActiveRate) {
+    out.push({ t: 'rate', s: String(m.promo_credits), strong: true });
+    if (m.promo_label) out.push({ t: 'active', s: String(m.promo_label) });
+    if (m.promo_factor === 0) out.push({ t: 'free', s: '免费' });
+    // 划线牌价放在最后，让折后价始终在最左边。
+    if (m.credits) out.push({ t: 'strike', s: String(m.credits) });
   } else {
-    // 3) 当前无生效优惠。
-    if (m.rate_unverified) {
-      // 保留数字但打标：它可能是一段已结束优惠的残留，而原价从这一行恢复不出来。
-      out += '<span title="这个倍率可能来自一段已结束的优惠 —— 上游把折后价写进 credits，' +
-        '优惠结束后那一行不会自己改回去。原价无法从上游恢复，请以实际扣费为准。" ' +
-        'style="cursor:help;color:var(--ink-3)">?</span> ';
-    }
-    out += m.credits ? esc(m.credits) : '—';
+    out.push({
+      t: 'rate',
+      s: m.credits ? String(m.credits) : '—',
+      // 有优惠声明但当前都不生效、且这一行的倍率像是折扣派生的。
+      unverified: !!m.rate_unverified,
+    });
+    if (m.promo_label) out.push({ t: 'active', s: String(m.promo_label) });
   }
 
-  // 时段性优惠（当前未生效，或已过期）：告诉用户「什么时候更便宜」比只报牌价
-  // 值钱得多。
-  for (const d of idleDecls) {
+  for (const d of idle) {
     const label = d.label || '优惠';
-    const until = d.until ? '\n截止 ' + String(d.until).slice(0, 10) : '';
     if (d.expired) {
-      out += ' <span class="tag" title="这段优惠已过截止日期，不再生效' + esc(until) + '">' +
-        esc(label + ' 已结束') + '</span>';
+      out.push({ t: 'expired', s: label + ' 已结束' });
       continue;
     }
-    // 没过期、只是当前不在时段（如夜间免费）。把时段写出来。
     const when = d.window ? ' ' + d.window : '';
-    out += ' <span class="tag" title="' +
-      esc((d.note || '当前不在生效时段') + until) + '">' +
-      esc(label + when) + '</span>';
+    out.push({ t: 'idle', s: label + when });
     if (d.factor === 0) {
-      out += ' <span class="tag" title="' + esc('到点自动免费' + until) + '">到点免费</span>';
+      out.push({ t: 'freeat', s: '到点免费' });
     } else if (d.factor != null && d.factor > 0 && d.factor < 1) {
-      out += ' <span class="tag" title="' + esc('到点打折' + until) + '">到点 ' +
-        esc(d.credits || ('x' + d.factor)) + '</span>';
+      out.push({ t: 'freeat', s: '到点 ' + (d.credits || ('x' + d.factor)) });
     }
   }
   return out;
+}
+
+// rateText 纯文本形态：<option> 里放不了 HTML。
+function rateText(m) {
+  return rateParts(m).map(p => p.s).join('  ');
+}
+
+/* rateCell 倍率列（模型页）：把 rateParts 画成带样式的 tag。 */
+function rateCell(m) {
+  const parts = rateParts(m);
+  const tipOf = p => {
+    if (p.t === 'rate' && p.unverified) {
+      return '这个倍率可能来自一段已结束的优惠 —— 上游把折后价写进 credits，' +
+        '优惠结束后那一行不会自己改回去。原价无法从上游恢复，请以实际扣费为准。';
+    }
+    return '';
+  };
+  return parts.map(p => {
+    const tip = tipOf(p);
+    const attrs = tip ? ' title="' + esc(tip) + '" style="cursor:help"' : '';
+    switch (p.t) {
+      case 'rate':
+        return p.unverified
+          ? '<span' + attrs + ' style="cursor:help;color:var(--ink-3)">?</span> ' + esc(p.s)
+          : (p.strong ? '<b>' + esc(p.s) + '</b>' : esc(p.s));
+      case 'active':
+        return '<span class="tag ok">' + esc(p.s) + '</span>';
+      case 'free':
+        return '<span class="tag ok">' + esc(p.s) + '</span>';
+      case 'strike':
+        return '<s style="color:var(--ink-3);font-size:11.5px">' + esc(p.s) + '</s>';
+      case 'expired':
+        return '<span class="tag" title="这段优惠已过截止日期，不再生效">' + esc(p.s) + '</span>';
+      default: // idle / freeat：当前不在时段
+        return '<span class="tag" title="当前不在生效时段">' + esc(p.s) + '</span>';
+    }
+  }).join(' ');
 }
 
 async function loadModels() {
@@ -3111,11 +3145,11 @@ async function loadTranslateModels() {
     const sel = $('trModel');
     if (!sel) return;
     const prev = sel.value;
+    // 用 rateText（与模型页同一个 rateParts）而不是只报一个数字：用户在**这里**
+    // 选模型，而「23:00 起免费」「这段优惠已结束」正是影响选择的信息。
+    // 早先这里只贴 '  x0.29'，于是 hy4-preview 的夜间免费在下拉里完全看不见。
     sel.innerHTML = TR_MODELS.map(m => {
-      const eff = trEffectiveRate(m);
-      const tag = eff === null ? '  倍率未公布'
-        : (eff === 0 ? '  免费' : '  x' + eff);
-      return `<option value="${esc(m.id)}">${esc(m.id)}${tag}</option>`;
+      return `<option value="${esc(m.id)}">${esc(m.id)}  ${esc(rateText(m))}</option>`;
     }).join('');
     // 默认选「当前免费」里最靠前的那个，而不是列表第一个 —— 第一个通常是 auto，
     // 那是唯一一个不公布倍率、且文档明说会浮动的模型。选哪个模型直接决定这篇

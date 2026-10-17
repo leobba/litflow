@@ -58,7 +58,17 @@ var (
 	reGetById    = regexp.MustCompile(`getElementById\("([^"]+)"\)`)
 	reHTMLID     = regexp.MustCompile(`\bid="([^"]+)"`)
 	reFuncDef    = regexp.MustCompile(`\bfunction\s+([A-Za-z_$][\w$]*)\s*\(`)
-	reAssignFunc = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function|\()`)
+	// 三种赋值式定义都要认：`= function`（匿名函数）、`= (…) =>`（带括号参数）、
+	// `= x =>`（单参数裸箭头）。
+	//
+	// 第三种是补上的：`const tipOf = p => …` 原先不被承认为定义，于是 tipOf(p)
+	// 被当成「调用了不存在的名字」而误报。改动 rateCell 时就这么被拦了一次 ——
+	// 拦得对（新名字确实要有人确认），但原因是工具不全，不是代码有错。
+	//
+	// 已知局限：这是文本检测，不区分作用域。一个名字在任何地方被赋值过就算
+	//「已定义」—— 实测 `const pick = $('btnTrPick')` 恰好让同名的局部箭头函数
+	// `const pick = s => …` 免检。要根治得上真正的解析器，收益不值得。
+	reAssignFunc = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)`)
 	// RE2 不支持后行断言 (?<!...)，所以先吃掉一个可选的前导字符再判断：
 	// 前导为 "." 说明是方法调用，不是本地函数调用。
 	reCall       = regexp.MustCompile(`(\.?)([A-Za-z_$][\w$]*)\s*\(`)
