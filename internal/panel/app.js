@@ -625,22 +625,81 @@ function outCell(m, pr) {
   return '<td class="num" title="' + esc(tip) + '"><span style="color:var(--ink-3)">?</span><div class="note">未测出' + stale + '</div></td>';
 }
 
-/* rateCell 倍率列：牌价 vs 生效价。上游 credits 是牌价（转正后基准倍率），
-   modelPromotions 给当前生效折扣（限时免费 factor=0 / 夜间五折 0.5 等）——
-   WorkBuddy 客户端显示的正是生效价。有折扣：生效价大字 + 标签 + 划线牌价，
-   悬停带时段说明；无 factor 只有标签（错峰类）：牌价 + 标签。 */
+/* rateCell 倍率列：牌价 / 生效价 / 未生效的优惠 / 可信度。
+ *
+ * 上游 credits 是牌价（转正后基准倍率），modelPromotions 给折扣
+ *（限时免费 factor=0 / 夜间五折 0.5 等）。WorkBuddy 客户端显示的正是生效价。
+ *
+ * 但**只显示生效的优惠会丢信息**，这是实测踩到的：hy4-preview 有一条
+ *「夜间免费」（23:00-08:00，到 11-01）。白天它不生效，于是这一格只剩 x0.29 ——
+ * 用户永远不知道它夜里免费，也就不会用它。所以未生效、已过期的声明都要露出来，
+ * 并说清是哪一种：
+ *
+ *   生效中   → 生效价大字 + 徽章 + 划线牌价（原行为）
+ *   时段外   → 牌价 + 「夜间免费 23:00-08:00」灰标签：现在不免费，但几点开始免费
+ *   已过期   → 牌价 + 「限时折扣 已结束」灰标签
+ *   倍率可疑 → 数字前加 ?，悬停说明它可能是已结束优惠的残留
+ *
+ * 最后一条参照 corrinehu/dsh-workbuddy-connect 的 rateUnknown。差别在于它把数字
+ * 整个丢掉、只显示「倍率未知」，理由是「留白会被读成免费」；我们改标注而保留数字，
+ * 因为用户要的是信息量 —— 但标注必须显眼，否则等于没标。
+ */
 function rateCell(m) {
-  const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
+  const decls = Array.isArray(m.promo_decls) ? m.promo_decls : [];
+  const idleDecls = decls.filter(d => !d.active);
+
+  // 1) 有生效折扣且有机器可读的折后价 → 生效价（原行为）
   if (m.promo_factor != null && m.promo_credits) {
+    const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
     const base = m.credits ? ' <s style="color:var(--ink-3);font-size:11.5px">' + esc(m.credits) + '</s>' : '';
     const label = m.promo_label ? ' <span class="tag ok">' + esc(m.promo_label) + '</span>' : '';
-    return '<span' + tip + ' style="cursor:help"><b>' + esc(m.promo_credits) + '</b>' + label + base + '</span>';
+    const free = m.promo_factor === 0 ? ' <span class="tag ok">免费</span>' : '';
+    return '<span' + tip + ' style="cursor:help"><b>' + esc(m.promo_credits) + '</b>' + label + free + base + '</span>';
   }
+
+  // 2) 有生效优惠但无 factor（错峰类，折扣数字只在 hover 文案里）→ 牌价 + 标签。
+  //    注意**不要在这里 return**：这一类模型往往还挂着另一条时段性优惠
+  //    （实测 glm-5.2：当前「错峰使用」生效，同时有一条 23:00-7:50 的五折）。
+  //    提前 return 会让用户看不到「夜里五折」—— 和只显示 x0.29 是同一个毛病。
+  let out = '';
   if (m.promo_label) {
-    return '<span' + tip + ' style="cursor:help">' + (m.credits ? esc(m.credits) : '—') +
+    const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
+    out = '<span' + tip + ' style="cursor:help">' + (m.credits ? esc(m.credits) : '—') +
       ' <span class="tag warn">' + esc(m.promo_label) + '</span></span>';
+  } else {
+    // 3) 当前无生效优惠。
+    if (m.rate_unverified) {
+      // 保留数字但打标：它可能是一段已结束优惠的残留，而原价从这一行恢复不出来。
+      out += '<span title="这个倍率可能来自一段已结束的优惠 —— 上游把折后价写进 credits，' +
+        '优惠结束后那一行不会自己改回去。原价无法从上游恢复，请以实际扣费为准。" ' +
+        'style="cursor:help;color:var(--ink-3)">?</span> ';
+    }
+    out += m.credits ? esc(m.credits) : '—';
   }
-  return m.credits ? esc(m.credits) : '—';
+
+  // 时段性优惠（当前未生效，或已过期）：告诉用户「什么时候更便宜」比只报牌价
+  // 值钱得多。
+  for (const d of idleDecls) {
+    const label = d.label || '优惠';
+    const until = d.until ? '\n截止 ' + String(d.until).slice(0, 10) : '';
+    if (d.expired) {
+      out += ' <span class="tag" title="这段优惠已过截止日期，不再生效' + esc(until) + '">' +
+        esc(label + ' 已结束') + '</span>';
+      continue;
+    }
+    // 没过期、只是当前不在时段（如夜间免费）。把时段写出来。
+    const when = d.window ? ' ' + d.window : '';
+    out += ' <span class="tag" title="' +
+      esc((d.note || '当前不在生效时段') + until) + '">' +
+      esc(label + when) + '</span>';
+    if (d.factor === 0) {
+      out += ' <span class="tag" title="' + esc('到点自动免费' + until) + '">到点免费</span>';
+    } else if (d.factor != null && d.factor > 0 && d.factor < 1) {
+      out += ' <span class="tag" title="' + esc('到点打折' + until) + '">到点 ' +
+        esc(d.credits || ('x' + d.factor)) + '</span>';
+    }
+  }
+  return out;
 }
 
 async function loadModels() {

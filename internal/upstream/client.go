@@ -1114,6 +1114,24 @@ type ModelInfo struct {
 	PromoCredits string   // 折扣后倍率原文（如 "0x" / "0.50x"），仅展示
 	PromoLabel   string   // 徽章文案（限时免费 / 夜间折扣 / 错峰使用）
 	PromoNote    string   // hover 说明原文（含时段/日期描述）
+
+	// PromoDecls 与这个模型相关的**全部**优惠声明（含当前未生效、已过期的）。
+	//
+	// 为什么不能只留生效的：hy4-preview 有一条「夜间免费」（23:00–08:00，到
+	// 11-01）。白天它不生效，于是面板只显示 x0.29 —— 用户永远不知道它夜里
+	// 免费。把未生效的也记下来，界面才能说「现在 x0.29，23:00 起免费」。
+	PromoDecls []PromoDecl
+
+	// RateUnverified 这个倍率现在不该被当成事实引用。
+	//
+	// 判据（参照 corrinehu/dsh-workbuddy-connect 的 rateUnknown）：该行带着优惠
+	// 声明、当前一条都不生效，且这一行的倍率**像是折扣派生的**（free / 带徽章 /
+	// 有 factor≠1 的优惠）。上游把折后价写进 credits 是实测存在的行为，而折扣
+	// 结束后那一行不会自己改回去 —— 于是缓存里的数字描述的是一段已经结束的优惠。
+	//
+	// 注意：**这一位不表示数字一定是错的**，只表示它不该被无条件相信。原价从这一行
+	// 里恢复不出来，所以界面要么标注、要么留白，但不能像正常价一样显示。
+	RateUnverified bool
 }
 
 // dynModelEntry 上游模型目录（CN /console 与 global /v2 同构）的单条模型解析形态，
@@ -1409,6 +1427,17 @@ func (c *Client) fetchV3Models(a *auth.Auth) ([]ModelInfo, error) {
 	return out, nil
 }
 
+// PromoDecl 一条与某模型相关的优惠声明，供界面展示（不论当前是否生效）。
+type PromoDecl struct {
+	Label   string   // 徽章文案（限时免费 / 夜间免费 / 夜间折扣 / 错峰使用）
+	Credits string   // 折后倍率原文（如 "0x" / "0.50x"）；空=无机器可读折扣
+	Factor  *float64 // 折扣系数（0=免费，0.5=五折）；nil=无（如「错峰使用」只有文案）
+	Note    string   // hover 说明原文
+	Active  bool     // 此刻是否生效
+	Expired bool     // validUntil 已过（与 Active=false 不同：那个可能是时段外）
+	Window  string   // 时段描述，如 "23:00-08:00"；空=全天
+	Until   string   // 截止日期原文（RFC3339）
+}
 // v3ModelPromotion /v3/config data.modelPromotions 单条优惠定义（2026-09-23 实测
 // 7 条：deepseek 系错峰五折、glm-5.2 夜间五折、hy3 与 hy4-preview-f 限时免费）。
 // discount 只在部分条目上存在：有 factor 的可算生效价；「错峰使用」类只有时段
@@ -1505,6 +1534,43 @@ func promoActive(p *v3ModelPromotion, now time.Time) bool {
 // applyModelPromotions 把当前生效的优惠挂到目录条目：同模型多条命中取 priority
 // 最高（实测 glm-5.2 白天 badge-only(50) 与夜间五折(100) 靠 priority+daily 双轨
 // 切换）。无 discount 对象的条目也挂标签/说明（错峰类），PromoFactor 留 nil。
+// promoWindowText 把 daily 时段拼成可读文本（"23:00-08:00"）。
+// 多条时用「、」连接；无 daily 视为全天，返回空串。
+func promoWindowText(p *v3ModelPromotion) string {
+	if p.Schedule == nil || len(p.Schedule.Daily) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(p.Schedule.Daily))
+	for _, w := range p.Schedule.Daily {
+		parts = append(parts, w.Start+"-"+w.End)
+	}
+	return strings.Join(parts, "、")
+}
+
+// promoExpired validUntil 已过。与「当前不生效」不同：夜间优惠在白天不生效但没过期，
+// 而过了 validUntil 的优惠是真的结束了 —— 界面上这两句话含义完全不同。
+func promoExpired(p *v3ModelPromotion, now time.Time) bool {
+	if p.Schedule == nil || p.Schedule.ValidUntil == "" {
+		return false
+	}
+	until, err := time.Parse(time.RFC3339, p.Schedule.ValidUntil)
+	if err != nil {
+		return false
+	}
+	return !now.Before(until)
+}
+
+// applyModelPromotions 把优惠挂到目录条目上。
+//
+// 两件事：
+//
+//  1. 当前生效的优惠（原行为不变）：同模型多条命中的取 priority 最高
+//     （实测 glm-5.2 白天 badge-only(50) 与夜间五折(100) 靠 priority+daily 双轨切换）。
+//     无 discount 对象的条目只挂标签/说明（错峰类），PromoFactor 留 nil。
+//
+//  2. **全部相关声明**（含未生效、已过期）记进 PromoDecls，并据此判定 RateUnverified。
+//     只留生效的那条会丢信息：hy4-preview 的「夜间免费」（23:00-08:00，到 11-01）
+//     在白天不生效，于是界面只剩一个 x0.29，用户永远不知道它夜里免费。
 func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 	if len(promos) == 0 || len(out) == 0 {
 		return
@@ -1515,20 +1581,48 @@ func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 		p    *v3ModelPromotion
 	}
 	best := map[string]cand{}
+	decls := map[string][]PromoDecl{}
+
 	for i := range promos {
 		p := &promos[i]
-		if !promoActive(p, now) {
-			continue
+		if !p.Enabled {
+			continue // 被上游关掉的优惠不算声明
 		}
+		active := promoActive(p, now)
 		for _, id := range p.ModelIDs {
 			if _, ok := out[id]; !ok {
 				continue // 目录外模型（如同名 global 变体）不挂
 			}
-			if b, seen := best[id]; !seen || p.Priority > b.prio {
-				best[id] = cand{prio: p.Priority, p: p}
+			d := PromoDecl{
+				Active:  active,
+				Expired: promoExpired(p, now),
+				Window:  promoWindowText(p),
+			}
+			if p.Badge != nil {
+				d.Label = p.Badge.Label
+			}
+			if p.Hover != nil {
+				d.Note = p.Hover.TextZh
+			}
+			if p.Discount != nil {
+				f := p.Discount.Factor
+				d.Factor = &f
+				d.Credits = p.Discount.DiscountedCredits
+			}
+			if p.Schedule != nil {
+				d.Until = p.Schedule.ValidUntil
+			}
+			decls[id] = append(decls[id], d)
+
+			if active {
+				if b, seen := best[id]; !seen || p.Priority > b.prio {
+					best[id] = cand{prio: p.Priority, p: p}
+				}
 			}
 		}
 	}
+
+	// 生效的优惠（原行为）
 	for id, c := range best {
 		mi := out[id]
 		if c.p.Badge != nil {
@@ -1541,6 +1635,36 @@ func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 			f := c.p.Discount.Factor
 			mi.PromoFactor = &f
 			mi.PromoCredits = c.p.Discount.DiscountedCredits
+		}
+		out[id] = mi
+	}
+
+	// 全部声明 + 倍率可信度
+	for id, ds := range decls {
+		mi := out[id]
+		mi.PromoDecls = ds
+		if _, hasActive := best[id]; hasActive {
+			// 当前有生效优惠：界面会显示「生效价 + 牌价」，不存在冒充问题。
+			out[id] = mi
+			continue
+		}
+		// 没有任何生效优惠。这一行的 credits 是牌价，还是某段已结束优惠的残留？
+		//
+		// 上游自己不一致，实测两条同因子（factor=0）的限免：hy3 的行内 credits 是
+		// "x0.00"（看起来被改写），step-5-preview 是 "x0.43"（看起来是牌价）。
+		// 光看 credits 分不出来，所以按「是否像折扣派生」判断：
+		//   free / 带徽章 / 有 factor≠1 的优惠 → 不该无条件相信这个数字。
+		derived := mi.PromoLabel != "" || mi.PromoNote != ""
+		if !derived {
+			for _, d := range ds {
+				if d.Factor != nil && *d.Factor != 1 {
+					derived = true
+					break
+				}
+			}
+		}
+		if derived {
+			mi.RateUnverified = true
 		}
 		out[id] = mi
 	}

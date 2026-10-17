@@ -892,6 +892,135 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
+// TestAppJSRateCellPromotions 倍率列的四种情况都必须可区分。
+//
+// 这条守的是用户实际看到的那一格。实测撞到的问题：hy4-preview 有一条
+// 「夜间免费」（23:00-08:00，到 11-01），白天不生效，于是这一格只剩 x0.29 ——
+// 用户永远不知道它夜里免费，也就不会用它。而「未生效」和「已过期」在界面上
+// 必须说成两句不同的话：一个是「现在不行，23 点开始」，一个是「这段优惠没了」。
+func TestAppJSRateCellPromotions(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; rateCell test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+// 只切 rateCell 本身。切到 esc 会带进这之间所有**顶层语句**（面板初始化代码
+// 要碰 DOM），在无 DOM 的 vm 里一执行就 ReferenceError: $ is not defined。
+const start = src.indexOf('function rateCell(');
+const end = src.indexOf('async function loadModels');
+if (start < 0 || end < 0 || end < start) throw new Error('rateCell region not found');
+const ctx = {
+  String, Array, Object, Number, isNaN, RegExp,
+  // esc 是最简单的 HTML 转义，用桩替掉，免得为此扩大切片范围。
+  esc: s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
+};
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.rateCell = rateCell;', ctx);
+const R = ctx.rateCell;
+const out = {
+  // 生效的限时免费：生效价 0x + 免费标签 + 划线牌价
+  activeFree: R({ credits: 'x0.79', promo_factor: 0, promo_credits: '0x', promo_label: '限时免费' }),
+  // 时段外未过期：保留牌价，并说出时段与「到点免费」
+  idleNight: R({
+    credits: 'x0.29',
+    rate_unverified: true,
+    promo_decls: [{ label: '夜间免费', active: false, expired: false, window: '23:00-08:00', factor: 0, until: '2026-11-01T00:00:00+08:00' }],
+  }),
+  // 已过期：必须说「已结束」，不能还说是免费
+  expired: R({
+    credits: 'x0.08',
+    promo_decls: [{ label: '限时折扣', active: false, expired: true, until: '2026-10-08T00:00:00+08:00' }],
+  }),
+  // 生效的错峰类（无 factor）：牌价 + 标签
+  activeBadgeOnly: R({ credits: 'x0.17', promo_label: '错峰使用', promo_note: '错峰五折' }),
+  // 实测 glm-5.2 的形态：当前「错峰使用」生效，**同时**挂着一条 23:00 起的五折。
+  // 这种时候如果因为「有生效标签」就提前 return，用户还是看不到夜里五折 ——
+  // 那和只显示 x0.29 是同一个毛病，所以专门钉一条。
+  activeBadgePlusIdle: R({
+    credits: 'x0.79',
+    promo_label: '错峰使用',
+    promo_note: '错峰五折',
+    promo_decls: [
+      { label: '夜间折扣', active: false, expired: false, window: '23:00-7:50', factor: 0.5, credits: '0.50x' },
+      { label: '夜间折扣', active: true, expired: false, window: '7:50-23:00' },
+    ],
+  }),
+  // 什么都没有
+  plain: R({ credits: 'x0.11' }),
+  // 无倍率且无任何优惠
+  empty: R({}),
+};
+process.stdout.write(JSON.stringify(out));`
+	f, err := os.CreateTemp(t.TempDir(), "rate-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rateCell node test failed: %v\n%s", err, out)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("解析 node 输出失败: %v\n原文: %s", err, out)
+	}
+
+	// 生效免费：生效价 + 免费
+	if !strings.Contains(got["activeFree"], "0x") || !strings.Contains(got["activeFree"], "免费") {
+		t.Errorf("生效的限时免费应显示 0x 与「免费」，实际 %q", got["activeFree"])
+	}
+
+	// 时段外：**必须同时出现牌价、时段、到点免费**。
+	// 少任何一项都等于回到了「只显示 x0.29」那个状态。
+	n := got["idleNight"]
+	for _, want := range []string{"x0.29", "夜间免费", "23:00-08:00", "到点免费"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("时段外的夜间免费必须显示 %q，实际 %q", want, n)
+		}
+	}
+	if !strings.Contains(n, "?") {
+		t.Errorf("rate_unverified 时必须打标（否则等于把可疑数字当事实），实际 %q", n)
+	}
+
+	// 已过期：说已结束，且不能说「到点免费」
+	e := got["expired"]
+	if !strings.Contains(e, "已结束") {
+		t.Errorf("过期优惠必须说「已结束」，实际 %q", e)
+	}
+	if strings.Contains(e, "到点免费") {
+		t.Errorf("已过期的优惠不能再说「到点免费」—— 那是在承诺一段已经结束的优惠，实际 %q", e)
+	}
+
+	// 生效但无 factor：牌价 + 标签
+	b := got["activeBadgeOnly"]
+	if !strings.Contains(b, "x0.17") || !strings.Contains(b, "错峰使用") {
+		t.Errorf("错峰类应显示牌价 + 标签，实际 %q", b)
+	}
+
+	// 有生效标签的同时还挂着时段性优惠：两条都要说出来。
+	// 提前 return 的实现会漏掉后半句，而那一句正是「几点更便宜」。
+	ab := got["activeBadgePlusIdle"]
+	for _, want := range []string{"错峰使用", "23:00-7:50", "到点"} {
+		if !strings.Contains(ab, want) {
+			t.Errorf("同时有生效标签与夜间折扣时必须显示 %q，实际 %q", want, ab)
+		}
+	}
+
+	if got["plain"] != "x0.11" {
+		t.Errorf("无优惠时应只显示倍率，实际 %q", got["plain"])
+	}
+	if got["empty"] != "\u2014" && got["empty"] != "—" {
+		t.Errorf("无倍率时应显示破折号，实际 %q", got["empty"])
+	}
+}
+
 func TestAppJSExpirySortedByExpiry(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

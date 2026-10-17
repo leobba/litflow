@@ -421,6 +421,41 @@ func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string
 	if mi.PromoNote != "" {
 		entry["promo_note"] = mi.PromoNote
 	}
+	// 全部相关优惠声明（含未生效、已过期）。只透出生效的那条会丢信息：
+	// hy4-preview 的「夜间免费」（23:00-08:00，到 11-01）在白天不生效，界面就
+	// 只剩一个 x0.29，用户无从知道它夜里免费。
+	if len(mi.PromoDecls) > 0 {
+		decls := make([]map[string]any, 0, len(mi.PromoDecls))
+		for _, d := range mi.PromoDecls {
+			one := map[string]any{
+				"label":   d.Label,
+				"active":  d.Active,
+				"expired": d.Expired,
+			}
+			if d.Credits != "" {
+				one["credits"] = d.Credits
+			}
+			if d.Factor != nil {
+				one["factor"] = *d.Factor
+			}
+			if d.Note != "" {
+				one["note"] = d.Note
+			}
+			if d.Window != "" {
+				one["window"] = d.Window
+			}
+			if d.Until != "" {
+				one["until"] = d.Until
+			}
+			decls = append(decls, one)
+		}
+		entry["promo_decls"] = decls
+	}
+	// 倍率可信度：有优惠声明、当前却都不生效，且这一行的倍率像是折扣派生的。
+	// 界面据此标注，而不是把一个可能已经失效的折后价当正常价显示。
+	if mi.RateUnverified {
+		entry["rate_unverified"] = true
+	}
 	if mi.MaxAllowedSize > 0 {
 		entry["max_allowed_size"] = mi.MaxAllowedSize
 	}
