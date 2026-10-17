@@ -338,7 +338,7 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', translate: 'PDF 翻译', models: '模型与档位', config: '配置', logs: '运行日志' };
 function go(v) {
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
@@ -348,6 +348,7 @@ function go(v) {
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
+  if (v === 'translate') loadTranslate();
   if (v === 'packages') loadPackages();
   // 到期提醒卡片：默认可见，进页面即用 overview 快照渲染（零上游请求，随首页统计
   // 每轮刷新）。不再「打开账号池就打上游」——逐账号实时查在账号多时会卡死面板。
@@ -2932,3 +2933,123 @@ if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
 
 // 「刷新」始终实时查（显式 force，不依赖事件对象真值）
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
+
+/* ===== PDF 翻译 =====
+   与账号/用量同一套 api() 与样式。这里刻意**不**画进度条：pdf2zh 用 rich 画阶段
+   表，管线下不吐（实测 7 种环境变量组合全部无效），所以只有 elapsed 与 pdf2zh
+   自报的 token 总量 —— 编一个会动的条就是在撒谎。
+   两个「完成但不对」的状态（produced_nothing / partial）与错误同色同重，
+   因为它们的文件看起来是好的而内容是错的。 */
+let TR_WARM = false;
+
+async function loadTranslate() {
+  if (!TR_WARM) { TR_WARM = true; loadTranslateModels(); }
+  await refreshTranslate();
+}
+
+async function loadTranslateModels() {
+  try {
+    const d = await api('models');
+    const rows = (d.models || []).slice();
+    // 只列能当翻译用的（有 id），并把当前生效倍率标在选择项里，
+    // 因为「用哪个模型」直接决定这篇论文花多少积分。
+    const sel = $('trModel');
+    sel.innerHTML = rows.map(m => {
+      const eff = m.promo_credits || m.credits || '';
+      const label = m.id + (eff ? '  ' + eff : '  (未公布倍率)');
+      return `<option value="${esc(m.id)}">${esc(label)}</option>`;
+    }).join('');
+    // 默认选第一个免费/最低倍率的，而不是列表第一个 —— 列表第一个常常是 auto。
+    const free = rows.find(m => {
+      const e = (m.promo_credits || m.credits || '').toLowerCase();
+      return e === '0x' || e === 'x0.00' || e === '0';
+    });
+    if (free) sel.value = free.id;
+  } catch (e) {
+    toast('读取模型失败：' + e.message);
+  }
+}
+
+async function refreshTranslate() {
+  try {
+    const d = await api('translate');
+    const jobs = d.jobs || [];
+    const c = d.counts || {};
+    $('trNote').textContent = d.configured === false
+      ? '未启用（config.json 的 translate.enabled）'
+      : `${jobs.length} 条 · 运行 ${c.running || 0} · 排队 ${c.queued || 0}`;
+    const body = $('trBody');
+    if (!jobs.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">还没有任务</td></tr>';
+      return;
+    }
+    body.innerHTML = jobs.map(j => {
+      const name = esc((j.source || '').split(/[\\/]/).pop());
+      // 两种「完成但不对」单独上色，与 failed 同色。
+      let cls = j.state;
+      if (j.produced_nothing || j.partial) cls = 'failed';
+      let note = '';
+      if (j.produced_nothing) note = '★ 完成但没有产出 —— 译文缺失';
+      else if (j.partial) note = '★ 疑似部分翻译：' + esc((j.warning || '').slice(0, 90));
+      else if (j.error) note = esc(j.error.slice(0, 120));
+      else if ((j.dual_pdfs || []).length) note = esc(j.dual_pdfs[0].split(/[\\/]/).pop());
+      const tok = (j.token_total === undefined || j.token_total === null || j.token_total < 0)
+        ? '—' : j.token_total;
+      const act = (j.state === 'queued' || j.state === 'running')
+        ? `<button class="xs" data-cancel="${esc(j.id)}">取消</button>` : '';
+      return `<tr class="${cls}">`
+        + `<td title="${esc(j.source)}">${name}</td>`
+        + `<td>${esc(j.state)}</td>`
+        + `<td>${esc(j.liveness || '')}</td>`
+        + `<td>${tok}</td>`
+        + `<td>${note}</td>`
+        + `<td>${act}</td></tr>`;
+    }).join('');
+    body.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => {
+      try { await api('translate/' + encodeURIComponent(b.dataset.cancel) + '/cancel', { method: 'POST' }); }
+      catch (e) { toast('取消失败：' + e.message); }
+      refreshTranslate();
+    });
+  } catch (e) {
+    $('trNote').textContent = '读取失败：' + e.message;
+  }
+}
+
+async function submitTranslate() {
+  const src = $('trPath').value.trim();
+  if (!src) { toast('先填一个 PDF 的绝对路径，或点「选择文件…」'); return; }
+  const payload = {
+    source: src,
+    model: $('trModel').value,
+    skip_existing: $('trSkip').value === '1',
+  };
+  try {
+    const j = await api('translate', { method: 'POST', body: JSON.stringify(payload) });
+    toast(j.state === 'skipped' ? '已有译文，已跳过' : '已提交：' + j.id);
+    refreshTranslate();
+  } catch (e) { toast('提交失败：' + e.message); }
+}
+
+async function uploadTranslate(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const k = localStorage.getItem(LS_KEY);
+  const h = k ? { Authorization: 'Bearer ' + k } : {};
+  try {
+    const r = await fetch('/panel/api/translate', { method: 'POST', body: fd, headers: h });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    toast('已上传并提交：' + d.id);
+    refreshTranslate();
+  } catch (e) { toast('上传失败：' + e.message); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const b = $('btnTrSubmit'); if (b) b.onclick = submitTranslate;
+  const rf = $('btnTrRefresh'); if (rf) rf.onclick = () => { loadTranslateModels(); refreshTranslate(); };
+  const pick = $('btnTrPick'); const file = $('trFile');
+  if (pick && file) {
+    pick.onclick = () => file.click();
+    file.onchange = () => { if (file.files && file.files[0]) uploadTranslate(file.files[0]); };
+  }
+});
