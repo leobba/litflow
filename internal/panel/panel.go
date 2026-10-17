@@ -27,6 +27,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/translate"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
@@ -65,6 +66,13 @@ type Config struct {
 	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
 	// 只读展示：网关不解析、不依赖其内容做任何路由/出站决策。
 	ProbeFile string
+
+	// Translate PDF 翻译队列（nil = 功能关闭，对应端点返回 501）。
+	// 队列在 internal/translate，面板只持有它——面板不拥有翻译逻辑，和它
+	// 不拥有选号逻辑是同一个原则。
+	Translate *translate.Queue
+	// TranslateWorkDir 上传与产出的落地目录。
+	TranslateWorkDir string
 }
 
 // Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
@@ -184,6 +192,12 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/usage", p.withAuth(p.usage))
 	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
+	// 翻译：与账号接口同一套鉴权。列表/详情/取消 + 两个提交形态。
+	p.mux.HandleFunc("POST /panel/api/translate", p.withAuth(p.translateSubmit))
+	p.mux.HandleFunc("GET /panel/api/translate", p.withAuth(p.translateList))
+	p.mux.HandleFunc("GET /panel/api/translate/{id}", p.withAuth(p.translateGetRoute))
+	p.mux.HandleFunc("POST /panel/api/translate/{id}/cancel", p.withAuth(p.translateCancelRoute))
+
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
 }
