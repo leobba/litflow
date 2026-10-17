@@ -45,3 +45,6 @@ docs/
 *.zip
 server.exe
 .DS_Store
+wb2api.exe
+wb*.log
+wb*.err
