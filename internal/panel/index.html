@@ -8,7 +8,8 @@
 /* ── 设计令牌：明暗两套独立色板 ─────────────────────────────────────────
    冷石墨基调（仪表盘语言，非营销页）：底色分层 + 单一靛蓝强调（仅交互），
    语义色只给状态。等宽数字承载所有观测值，tabular-nums 对齐。 */
-:root {
+@keyframes trpulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  :root {
   --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
   --line: #262c3a; --line-soft: #1e232e;
   --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #6b7488;
@@ -738,50 +739,74 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     <section class="view" id="view-translate" hidden>
       <div class="box">
         <header>
-          <h3>PDF 翻译 <span class="hint">翻译流量走本网关，因此与账号/冷却共用同一套观测</span></h3>
-          <span class="note" id="trChainNote"></span>
+          <h3>翻译论文</h3>
           <span class="grow"></span>
+          <span class="note" id="trChainNote"></span>
           <span class="note" id="trNote">—</span>
           <button class="xs" id="btnTrRefresh">刷新</button>
         </header>
-        <div class="box" id="zoteroCard" style="margin-top:10px">
-          <header>
-            <h3>Zotero 集成 <span class="hint">装一次插件，之后在 Zotero 里右键/菜单就能翻译</span></h3>
-            <span class="grow"></span>
-            <span class="note" id="ztGate"></span>
-            <button class="xs" id="btnZtRefresh">重新检测</button>
-          </header>
-          <div class="fbar" style="align-items:center">
-            <span class="note" id="ztState">检测中…</span>
-            <span class="grow"></span>
-            <button class="xs primary" id="btnZtDownload">下载插件</button>
-          </div>
-          <div class="note" id="ztHint" style="padding:8px 12px 12px"></div>
-        </div>        <div class="fbar">
-          <input id="trPath" type="text" placeholder="本机 PDF 绝对路径，例如 D:\papers\paper.pdf" style="min-width:320px">
-          <select id="trModel" aria-label="翻译模型"></select>
-          <select id="trSkip" aria-label="已有译文">
-            <option value="1">已有译文则跳过</option>
-            <option value="0">强制重译</option>
-          </select>
-          <button class="xs primary" id="btnTrSubmit">提交翻译</button>
-          <label class="xs" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <span>或上传</span><input id="trFile" type="file" accept="application/pdf" style="display:none">
+
+        <!-- 提交区：主操作放最上面，输入框占满一行，按钮成组靠右 -->
+        <div class="pad" style="padding-bottom:12px">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input id="trPath" type="text" style="flex:1;min-width:260px"
+                   placeholder="本机 PDF 的绝对路径，例如 D:\\papers\\paper.pdf">
+            <select id="trModel" aria-label="翻译模型" style="width:auto"></select>
+            <select id="trSkip" aria-label="已有译文" style="width:auto">
+              <option value="1">已有译文则跳过</option>
+              <option value="0">强制重译</option>
+            </select>
+            <button class="xs primary" id="btnTrSubmit">提交翻译</button>
             <button class="xs" id="btnTrPick" type="button">选择文件…</button>
-          </label>
+            <input id="trFile" type="file" accept="application/pdf" style="display:none">
+          </div>
+          <div class="note" style="margin-top:9px;line-height:1.7">
+            串行队列 —— 一次只跑一篇（两个 BabelDOC 进程各约 1.8&nbsp;GB，并发会变成 swap 风暴）。
+            这里不显示百分比：pdf2zh 在管线下不吐阶段条，编一个会动的进度条就是撒谎，所以只报已用时和 pdf2zh 自己报的 token 总量。
+          </div>
         </div>
-        <div class="note" style="padding:6px 12px">
-          串行队列：一次只跑一篇（两个 BabelDOC 进程各约 1.8&nbsp;GB，并发会变成 swap 风暴）。
-          不显示百分比 —— pdf2zh 在管线下不吐阶段条，编一个会动的条就是撒谎。
+
+        <!-- 队列统计：一眼看到「在跑几个、排队几个」 -->
+        <div style="display:flex;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)">
+          <div class="stat" style="flex:1"><div class="v" id="trStatRun">—</div><div class="k">运行中</div></div>
+          <div class="stat" style="flex:1"><div class="v" id="trStatQueued">—</div><div class="k">排队</div></div>
+          <div class="stat" style="flex:1"><div class="v" id="trStatDone">—</div><div class="k">已完成</div></div>
+          <div class="stat" style="flex:1"><div class="v" id="trStatFailed">—</div><div class="k">失败</div></div>
         </div>
-        <div style="overflow:auto">
+
+        <div class="tbl-wrap">
           <table class="tbl" id="trTbl">
             <thead><tr>
-              <th style="min-width:220px">文件</th><th>状态</th><th>用时</th>
-              <th>token</th><th style="min-width:300px">说明</th><th></th>
+              <th style="min-width:230px">文件</th>
+              <th style="width:96px">状态</th>
+              <th style="width:110px">用时</th>
+              <th style="width:88px">token</th>
+              <th style="min-width:260px">说明</th>
+              <th style="width:104px"></th>
             </tr></thead>
-            <tbody id="trBody"><tr><td colspan="6" class="empty">还没有任务</td></tr></tbody>
+            <tbody id="trBody">
+              <tr><td colspan="6"><div class="empty">
+                <div class="big">还没有翻译任务</div>
+                在 Zotero 里选中文献 → 工具 → 「Dual Sync：翻译选中条目」，
+                或把 PDF 的绝对路径填到上面。
+              </div></td></tr>
+            </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Zotero 单独一张卡：它是一条独立的安装链路，不该塞在翻译卡里 -->
+      <div class="box" id="zoteroCard">
+        <header>
+          <h3>Zotero 集成 <span class="hint">装一次插件，之后在 Zotero 里选中文献即可翻译</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="ztGate"></span>
+          <button class="xs" id="btnZtRefresh">重新检测</button>
+          <button class="xs primary" id="btnZtDownload">下载插件</button>
+        </header>
+        <div class="pad" style="padding-top:13px;padding-bottom:13px">
+          <div style="font-size:13px" id="ztState">检测中…</div>
+          <div class="note" id="ztHint" style="margin-top:7px;line-height:1.7"></div>
         </div>
       </div>
     </section>    <section class="view" id="view-models" hidden>
