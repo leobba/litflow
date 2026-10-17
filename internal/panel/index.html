@@ -744,7 +744,20 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <span class="note" id="trNote">—</span>
           <button class="xs" id="btnTrRefresh">刷新</button>
         </header>
-        <div class="fbar">
+        <div class="box" id="zoteroCard" style="margin-top:10px">
+          <header>
+            <h3>Zotero 集成 <span class="hint">装一次插件，之后在 Zotero 里右键/菜单就能翻译</span></h3>
+            <span class="grow"></span>
+            <span class="note" id="ztGate"></span>
+            <button class="xs" id="btnZtRefresh">重新检测</button>
+          </header>
+          <div class="fbar" style="align-items:center">
+            <span class="note" id="ztState">检测中…</span>
+            <span class="grow"></span>
+            <button class="xs primary" id="btnZtDownload">下载插件</button>
+          </div>
+          <div class="note" id="ztHint" style="padding:8px 12px 12px"></div>
+        </div>        <div class="fbar">
           <input id="trPath" type="text" placeholder="本机 PDF 绝对路径，例如 D:\papers\paper.pdf" style="min-width:320px">
           <select id="trModel" aria-label="翻译模型"></select>
           <select id="trSkip" aria-label="已有译文">

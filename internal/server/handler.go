@@ -40,6 +40,9 @@ type Config struct {
 	Translate *translate.Queue
 	// TranslateWorkDir 上传与产出的落地目录。
 	TranslateWorkDir string
+	// ZoteroPluginPath 插件 xpi 路径。空 = 在 exe 同目录 / 工作目录找。
+	// 留空是常态：发行版把 xpi 和 exe 放一起，用户不需要知道路径。
+	ZoteroPluginPath string
 
 	// TranslateChain 跨模型轮换链（翻译用）。
 	//
@@ -163,6 +166,11 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("POST /translate", h.withQueueAuth(h.translateSubmit))
 	h.mux.HandleFunc("GET /translate/{id}", h.withQueueAuth(h.translateGetRoute))
 	h.mux.HandleFunc("POST /translate/{id}/cancel", h.withQueueAuth(h.translateCancelRoute))
+
+	// Zotero 集成：状态与插件下载。走 /panel/api 前缀是因为它们是面板的功能，
+	// 需要 api_key（与其它面板接口同口径）——插件自己不用这两个端点。
+	h.mux.HandleFunc("GET /panel/api/zotero/status", h.withAuth(h.zoteroStatus))
+	h.mux.HandleFunc("GET /panel/api/zotero/plugin", h.withAuth(h.zoteroPlugin))
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}
