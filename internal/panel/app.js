@@ -3078,6 +3078,22 @@ function trEffectiveRate(m) {
    纯文字 'done' / 'running' 在深色表格里几乎看不出区别，而「正在跑」和「已经完了」
    是这个页面最需要一眼分开的两件事。running 额外带一个呼吸点：静止的数字看起来
    像卡住，而这个队列是串行的，一篇跑五分钟期间别的任务确实一动不动。 */
+// failLabel 把后端给的英文类别映射成中文短标签。
+//
+// 类别是稳定标识（进 API、进落盘），但界面不该直接显示 rate_limited ——
+// 那对用户没有意义。未知类别原样显示：宁可难看，也别把信息吞掉。
+const FAIL_LABELS = {
+	rate_limited: '被限流',
+	auth: '密钥/授权',
+	model_unavailable: '模型不可用',
+	network: '网络/代理',
+	encrypted: 'PDF 加密',
+	scanned: '扫描件',
+	quota: '额度不足',
+	unknown: '未知原因',
+};
+function failLabel(kind) { return FAIL_LABELS[kind] || kind || '失败'; }
+function pathBase(p) { return String(p || '').split(/[\\/]/).pop(); }
 function trStateChip(j) {
   const map = {
     running: ['ok', '● 运行中'],
@@ -3144,6 +3160,26 @@ async function refreshTranslate() {
       ? '轮换链：' + chain.join(' → ')
       : '未配置轮换链（translate.chain）—— 模型被限流时会一直重试它';
   }
+  // 术语表状态。三种状态必须可区分：没配 / 配了且生效 / 配了但不可用。
+  // 第三种最危险 —— 它静默不生效，用户会一直以为术语在起作用。
+  if ($('trGlossary')) {
+	const gl = d.glossaries || [];
+	if (!gl.length) {
+		$('trGlossary').textContent = '术语表：未配置（config.json 的 translate.glossaries）';
+		$('trGlossary').style.color = '';
+	} else {
+		const good = gl.filter(g => g.ok);
+		const bad = gl.filter(g => !g.ok);
+		const total = good.reduce((n, g) => n + (g.terms || 0), 0);
+		let txt = `术语表：${good.length} 份生效，共 ${total} 条词条`;
+		if (bad.length) {
+			txt += ` · ${bad.length} 份不可用：` +
+				bad.map(g => pathBase(g.path) + '（' + (g.error || '未知') + '）').join('、');
+		}
+		$('trGlossary').textContent = txt;
+		$('trGlossary').style.color = bad.length ? '#c0392b' : '';
+	}
+  }
   if ($('trNote')) {
     $('trNote').textContent = d.configured === false
       ? '未启用（config.json 的 translate.enabled）'
@@ -3180,7 +3216,17 @@ async function refreshTranslate() {
     } else if (j.partial) {
       note = '<b>★ 疑似部分翻译</b>：' + esc((j.warning || '').slice(0, 110));
     } else if (j.error) {
-      note = esc(String(j.error).slice(0, 140));
+    	// error 现在形如「原因」+「建议」两段。建议不能截断 —— 被砍掉的往往
+    	// 正是「该怎么办」那一半，剩下的反而是没用的堆栈尾巴。
+    	const parts = String(j.error).split('\n');
+    	note = '';
+    	if (j.fail_kind) {
+    		note = `<span class="chip bad">${esc(failLabel(j.fail_kind))}</span> `;
+    	}
+    	note += esc(parts[0].slice(0, 120));
+    	if (parts.length > 1) {
+    		note += `<br><span class="note">${esc(parts.slice(1).join(' '))}</span>`;
+    	}
     } else if ((j.dual_pdfs || []).length) {
       const f = j.dual_pdfs[0];
       note = `<a href="#" data-copy="${esc(f)}" title="${esc(f)}">`
@@ -3196,13 +3242,23 @@ async function refreshTranslate() {
     const tok = (j.token_total === undefined || j.token_total === null || j.token_total < 0)
       ? '—' : Number(j.token_total).toLocaleString();
     const busy = (j.state === 'queued' || j.state === 'running');
-    const act = busy
-      ? `<button class="xs" data-cancel="${esc(j.id)}">取消</button>`
-      : (j.state === 'skipped'
-        ? `<button class="xs primary" data-again="${esc(j.source)}" data-model="${esc(j.model || '')}">重新翻译</button>`
-        : (j.dual_pdfs || []).length
-          ? `<button class="xs" data-copy="${esc(j.dual_pdfs[0])}">复制路径</button>`
-          : '');
+    // 按钮选择。failed 也要有动作 —— 它是最常见的状态，却是原来唯一没有
+    // 出口的一个：用户得滚回上面重新粘一遍路径才能再试一次。
+    const retry = `<button class="xs primary" data-again="${esc(j.source)}" data-model="${esc(j.model || '')}">重试</button>`;
+    const copy = (j.dual_pdfs || []).length
+      ? `<button class="xs" data-copy="${esc(j.dual_pdfs[0])}">复制路径</button>`
+      : '';
+    let act;
+    if (busy) {
+      act = `<button class="xs" data-cancel="${esc(j.id)}">取消</button>`;
+    } else if (j.state === 'failed' || j.state === 'cancelled') {
+      // 失败给重试最有用；取消多半是选错了模型，重试同样是最短路径。
+      act = retry + (copy ? ' ' + copy : '');
+    } else if (j.state === 'skipped') {
+      act = `<button class="xs primary" data-again="${esc(j.source)}" data-model="${esc(j.model || '')}">重新翻译</button>`;
+    } else {
+      act = copy;
+    }
     return `<tr class="${cls}">`
       + `<td title="${esc(j.source)}">${name}</td>`
       + '<td>' + trStateChip(j) + '</td>'

@@ -259,6 +259,23 @@ func (q *Queue) SetDefaultModel(m string) {
 }
 
 // DefaultModel 当前默认模型。
+// GlossaryFiles 当前配置的术语表路径（副本，调用方不能改内部状态）。
+//
+// 从队列而不是从 Handler 的 cfg 读：面板保存设置走的是 Queue.SetGlossaries，
+// 从 cfg 读会拿到启动时的旧值，表现为「保存了但界面不变」。
+func (q *Queue) GlossaryFiles() []string {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return append([]string(nil), q.cfg.Glossaries...)
+}
+
+// SetGlossaries 更新术语表路径（面板保存时调用）。
+func (q *Queue) SetGlossaries(paths []string) {
+	q.mu.Lock()
+	q.cfg.Glossaries = append([]string(nil), paths...)
+	q.mu.Unlock()
+	q.changed(nil)
+}
 func (q *Queue) DefaultModel() string {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
@@ -893,6 +910,10 @@ func MarshalJob(j *Job) map[string]any {
 		"finished_at":      j.FinishedAt,
 		"dual_pdfs":        j.DualPDFs,
 		"error":            j.Error,
+		// 失败类别。界面用它决定给什么建议；error 里已附了对应的一句话，
+		// 但类别本身要单独送出去 —— 没有它，面板只能靠 match 中文文案来分类。
+		"fail_kind": j.FailKind,
+
 		"produced_nothing": j.ProducedNothing,
 		"partial":          j.Partial,
 		"warning":          j.Warning,

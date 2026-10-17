@@ -121,6 +121,19 @@ func (h *Handler) defaultModel() string {
 	return "auto"
 }
 
+// glossaryStatus 术语表体检结果，随列表下发。
+//
+// 为什么要在界面上显示：术语表是**可选**功能，配错了只会被忽略（不阻断翻译）。
+// 于是「配了但没生效」和「配了且生效」在界面上长得一模一样 —— 用户会一直
+// 以为术语在起作用。启动日志说过一次，但用户不会去看日志。
+func (h *Handler) glossaryStatus() []translate.GlossaryCheck {
+	q := h.queue()
+	if q == nil {
+		return []translate.GlossaryCheck{}
+	}
+	return translate.CheckGlossaries(q.GlossaryFiles())
+}
+
 // writeJSONQ 只在队列端点用：与 /v1 的 OpenAI 错误体分开，因为调用方是插件，
 // 它读的是 {"error": "..."} 这种平铺形状（见 LitFlow 契约）。
 func writeJSONQ(w http.ResponseWriter, status int, v any) {
@@ -204,6 +217,10 @@ func (h *Handler) translateList(w http.ResponseWriter, r *http.Request) {
 		"jobs":       out,
 		"chain":      h.cfg.TranslateChain,
 		"default_model": h.defaultModel(),
+		// 术语表状态随列表下发。它是可选功能，配错了只会被忽略 —— 不在这里
+		// 显示出来，用户就永远不知道「我配了术语表」到底生效没有。
+		"glossaries": h.glossaryStatus(),
+
 	})
 }
 

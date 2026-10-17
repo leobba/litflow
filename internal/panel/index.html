@@ -764,6 +764,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             串行队列 —— 一次只跑一篇（两个 BabelDOC 进程各约 1.8&nbsp;GB，并发会变成 swap 风暴）。
             这里不显示百分比：pdf2zh 在管线下不吐阶段条，编一个会动的进度条就是撒谎，所以只报已用时和 pdf2zh 自己报的 token 总量。
           </div>
+          <!-- 术语表状态。必需显示的理由：术语表配错只会被忽略而不阻断翻译，
+               所以「配了未生效」和「配了且生效」在别处长得一模一样。 -->
+          <div class="note" id="trGlossary" style="margin-top:7px;line-height:1.7">术语表：未配置</div>
         </div>
 
         <!-- 队列统计：一眼看到「在跑几个、排队几个」 -->

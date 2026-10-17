@@ -376,6 +376,70 @@ func TestStaticAssetsAreNotCached(t *testing.T) {
 // TestNoInlineEventHandlers CSP 用的是 script-src 'self'（不含 unsafe-inline），
 // 所以页面里出现 onclick="..." 这类内联处理器会被浏览器直接拦掉，而且只在
 // 控制台报错、界面上什么都不发生。这条断言把它挡在提交前。
+// TestEveryJobStateHasAnAction 每个终态都要有出口。
+//
+// 为什么值得单独一条：失败是翻译任务最常见的终态，而它长时间是**唯一没有任何
+// 按钮**的那个 —— 用户想再试一次，得滚回输入框重新粘一遍完整路径。这类缺失不会
+// 被任何语法或引用检查发现（代码完全合法），只能靠一条「状态 × 动作」的完备性
+// 断言守住。
+//
+// 这是静态的结构断言，不是行为测试：它证明「failed 分支存在」，不证明「渲染出来
+// 真的有一个按钮」。后者需要 DOM，本仓库没有 JS 测试环境 —— 这个边界要说清楚，
+// 否则它看起来比实际更强。
+func TestEveryJobStateHasAnAction(t *testing.T) {
+	js := stripJSComments(srcJS())
+
+	// 状态清单以 trStateChip 的映射表为准 —— 单一来源，不另抄一份。
+	start := strings.Index(js, "const map = {")
+	if start < 0 {
+		t.Fatal("找不到 trStateChip 的状态映射表")
+	}
+	end := strings.Index(js[start:], "};")
+	if end < 0 {
+		t.Fatal("状态映射表没有闭合")
+	}
+	block := js[start : start+end]
+	states := regexp.MustCompile(`(\w+):\s*\[`).FindAllStringSubmatch(block, -1)
+	if len(states) < 5 {
+		t.Fatalf("只解析出 %d 个状态，映射表格式可能变了", len(states))
+	}
+
+	// 动作选择区：从 retry 的定义到表格行的 return 之间。
+	actStart := strings.Index(js, "const retry =")
+	actEnd := strings.Index(js, "return `<tr class=")
+	if actStart < 0 || actEnd < 0 || actEnd <= actStart {
+		t.Fatal("找不到动作选择区")
+	}
+	act := js[actStart:actEnd]
+
+	// queued / running 由 busy 统一覆盖；done 走兜底 else（显示「复制路径」）；
+	// 其余每个状态都必须有显式分支。
+	//
+	// 把 done 单独列出来而不是让它算作「有分支」，是因为它确实没有 —— 它靠的是
+	// 最后一个 else。写成例外比放宽成「出现 else 就算过」更精确：后者会让
+	// 「failed 分支被删掉」也通过，而那正是这条断言要防的事。
+	for _, m := range states {
+		st := m[1]
+		if st == "queued" || st == "running" {
+			if !strings.Contains(act, "busy") {
+				t.Errorf("状态 %q 依赖 busy，但动作区没有 busy", st)
+			}
+			continue
+		}
+		if st == "done" {
+			continue // 兜底 else → 复制路径
+		}
+		if !strings.Contains(act, "'"+st+"'") {
+			t.Errorf("状态 %q 在动作区没有分支 —— 这个状态的任务将没有任何可用按钮", st)
+		}
+	}
+
+	// 必须有一个兜底 else，否则「完成」这类正常状态会拿到 undefined。
+	if !regexp.MustCompile(`\}\s*else\s*\{`).MatchString(act) {
+		t.Error("动作选择缺少兜底 else 分支")
+	}
+}
+
 func TestNoInlineEventHandlers(t *testing.T) {
 	// **先剥掉 HTML 注释**：注释里出现这个属性的字面量是合法的（比如解释为什么
 	// 删掉了它），而朴素的子串搜索会把它当成真处理器。这条判断标准的变化本身
