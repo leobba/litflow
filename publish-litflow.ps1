@@ -43,25 +43,39 @@ if ($DryRun) {
 }
 
 # ── token ──────────────────────────────────────────────────────────────
-$token = $env:GITHUB_TOKEN
-if (-not $token -and (Test-Path '.env')) {
-    $line = Get-Content '.env' | Where-Object { $_ -match '^\s*GITHUB_TOKEN\s*=' } | Select-Object -First 1
-    if ($line) { $token = ($line -replace '^\s*GITHUB_TOKEN\s*=\s*', '').Trim().Trim('"').Trim("'") }
+# ── token：按约定链查找，不要每次让用户重新生成 ────────────────────────
+#
+# 链：env:GITHUB_TOKEN → 本目录 .env → ~/.dsh/.credentials.yaml 的 refs.GITHUB_TOKEN
+# 第三条是本机的长期凭据，所以换项目不用再要一次 token。
+# 技能目录里附带同名实现，这里调用它以免两处漂移。
+$skillHelper = Join-Path $env:USERPROFILE '.dsh\skills\github-release-and-auto-update\get-github-token.ps1'
+if (Test-Path $skillHelper) {
+    $token = (& $skillHelper -From (Get-Location).Path 2>$null | Select-Object -Last 1)
+} else {
+    # 技能不存在时的退化路径：只查 env 与 .env，行为可预期。
+    $token = $env:GITHUB_TOKEN
+    if (-not $token -and (Test-Path '.env')) {
+        $line = Get-Content '.env' | Where-Object { $_ -match '^\s*GITHUB_TOKEN\s*=' } | Select-Object -First 1
+        if ($line) { $token = ($line -replace '^\s*GITHUB_TOKEN\s*=\s*', '').Trim().Trim('"').Trim("'") }
+    }
 }
 if (-not $token) {
-    Write-Host "没有找到 GITHUB_TOKEN。" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  1. https://github.com/settings/tokens/new"
-    Write-Host "  2. Note 填 litflow，Expiration 选 30 days"
-    Write-Host "  3. 勾选 repo 和 workflow（后者必须有，否则推带 Actions 的仓库会被拒）"
-    Write-Host "  4. Generate，复制 ghp_... 写进 .env："
-    Write-Host "       GITHUB_TOKEN=ghp_xxx"
-    Write-Host ""
-    Write-Host "  .env 已在 .gitignore 里，不会被提交。"
+    Write-Host '没有找到 GITHUB_TOKEN。已查：' -ForegroundColor Red
+    Write-Host '  · 环境变量 GITHUB_TOKEN'
+    Write-Host '  · 本目录 .env'
+    Write-Host "  · $env:USERPROFILE\.dsh\.credentials.yaml 的 refs.GITHUB_TOKEN"
+    Write-Host ''
+    Write-Host '获取（一次，之后跨项目复用）：' -ForegroundColor Yellow
+    Write-Host '  1. https://github.com/settings/tokens/new'
+    Write-Host '  2. Note 填用途，Expiration 30 天'
+    Write-Host '  3. 勾 repo + workflow（后者必须有）'
+    Write-Host '  4. 写进凭据库的 refs: 段，缩进 4 空格：GITHUB_TOKEN: ghp_xxx'
+    Write-Host ''
+    Write-Host '不要把 token 粘贴到对话里 —— 那等于泄露。'
     exit 1
 }
 if ($token -notmatch '^gh[ps]_') {
-    Write-Host "GITHUB_TOKEN 看起来不像 GitHub token（应以 ghp_ 或 ghs_ 开头）。" -ForegroundColor Red
+    Write-Host 'GITHUB_TOKEN 格式不对（应以 ghp_ 或 ghs_ 开头）。' -ForegroundColor Red
     exit 1
 }
 $headers.Authorization = "Bearer $token"
