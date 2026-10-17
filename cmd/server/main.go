@@ -291,6 +291,7 @@ func main() {
 		tcfg.TimeoutS = cfg.Translate.TimeoutS
 		tcfg.MaxHistory = cfg.Translate.MaxHistory
 		tcfg.DefaultModel = cfg.Translate.DefaultModel
+		tcfg.Glossaries = cfg.Translate.Glossaries
 		selfURL := "http://127.0.0.1" + cfg.Listen + "/v1"
 		if strings.HasPrefix(cfg.Listen, ":") {
 			selfURL = "http://127.0.0.1" + cfg.Listen + "/v1"
@@ -317,6 +318,15 @@ func main() {
 		tq.Start()
 		defer tq.Stop()
 		log.Printf("[translate] PDF 翻译已启用；产出目录 %s", translateWorkDir)
+		// 术语表启动即校验：一个拼错的路径若留到 pdf2zh 里，用户看到的是一篇
+		// 没译的论文加一段陌生堆栈，而不是「这个文件找不到」。
+		for _, g := range translate.CheckGlossaries(cfg.Translate.Glossaries) {
+			if g.OK {
+				log.Printf("[translate] 术语表 %s：%d 条词条", filepath.Base(g.Path), g.Terms)
+			} else {
+				log.Printf("[translate] 术语表 %s 不可用：%s（该表忽略，翻译照常）", g.Path, g.Error)
+			}
+		}
 		if len(cfg.Translate.Chain) > 0 {
 			log.Printf("[translate] 跨模型轮换链: %v", cfg.Translate.Chain)
 		} else {

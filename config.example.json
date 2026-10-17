@@ -109,6 +109,7 @@
     "ignore_cache": false,
     "auto_glossary": false,
     "timeout_s": 3600,
-    "max_history": 200
+    "max_history": 200,
+    "glossaries": []
   }
 }

@@ -67,6 +67,8 @@ type Job struct {
 	Model     string  `json:"model"`
 	QPS       string  `json:"qps"`
 	State     string  `json:"state"`
+	// FailKind 失败类别（failure.go 的常量）。空 = 未分类。
+	FailKind string `json:"fail_kind,omitempty"`
 	CreatedAt float64 `json:"created_at"`
 	StartedAt float64 `json:"started_at"`
 	FinishedAt float64 `json:"finished_at"`
@@ -156,6 +158,12 @@ type Config struct {
 
 	// WorkDir 产出与中间文件落在哪。空 = PDF 同目录。
 	WorkDir string `json:"work_dir"`
+
+	// Glossaries 用户术语表（CSV 路径列表，逗号分隔传给 pdf2zh）。
+	//
+	// 与 AutoGlossary 是两件事：那个是自动抽取（第二遍全文档 LLM 调用，会 429），
+	// 这个是静态文件、零额外请求。默认关掉自动抽取，但这一项可以放心开。
+	Glossaries []string `json:"glossaries"`
 
 	// DefaultModel 提交时没带模型用哪个。**不要硬编码 auto**：
 	// Zotero 插件只发 {source}，不带模型 —— 所以这条默认值就是它实际使用的模型。
@@ -518,13 +526,14 @@ func (q *Queue) runOne(id string) {
 	cancelledBeforeStart := job.State == StateCancelled
 	q.mu.RUnlock()
 	if cancelledBeforeStart {
-		q.finish(job, StateCancelled, "", nil, -1)
+		q.finish(job, StateCancelled, "", nil, -1, "")
 		return
 	}
 
 	exitCode, output, duals, err := q.spawn(job)
 	if err != nil {
-		q.finish(job, StateFailed, err.Error(), nil, -1)
+		kind, _ := ClassifyFailure(err.Error())
+		q.finish(job, StateFailed, err.Error(), nil, -1, kind)
 		return
 	}
 
@@ -532,15 +541,22 @@ func (q *Queue) runOne(id string) {
 	switch {
 	case exitCode != 0:
 		last := lastLine(output)
-		q.finish(job, StateFailed,
-			fmt.Sprintf("pdf2zh exit %d: %s", exitCode, last), duals, tokens)
+		// 按**整段输出**分类，而不是按 lastLine：429 之类往往不在最后一行，
+		// 最后一行常是重试日志。建议文案由 finish 统一追加（FailureHint）。
+		kind, _ := ClassifyFailure(output)
+		msg := fmt.Sprintf("pdf2zh exit %d: %s", exitCode, last)
+		if kind == FailUnknown {
+			// 认不出就明说，而不是装作认得。原始输出已在 OutputTail 里。
+			msg += "（无法从输出判断原因，原始输出见任务详情）"
+		}
+		q.finish(job, StateFailed, msg, duals, tokens, kind)
 	case len(duals) == 0:
 		// **静默失败**：进程成功结束，但没有双语文件。
 		q.finish(job, StateFailed,
 			"pdf2zh finished but produced no dual PDF — the output would be "+
-				"missing paragraphs silently", nil, tokens)
+				"missing paragraphs silently", nil, tokens, "")
 	default:
-		q.finish(job, StateDone, "", duals, tokens)
+		q.finish(job, StateDone, "", duals, tokens, "")
 	}
 }
 
@@ -551,7 +567,9 @@ func (q *Queue) runOne(id string) {
 // 结果第二次解锁被 Go 判成 `fatal error: sync: Unlock of unlocked RWMutex`
 // ——那不是 panic，是**直接杀掉进程**，网关连同所有账号池状态一起消失。
 // 教训：RWMutex 的加减锁只能有一个来源，要么 defer 要么显式，不能都写。
-func (q *Queue) finish(job *Job, state, msg string, duals []string, tokens int64) {
+func (q *Queue) finish(job *Job, state, msg string, duals []string, tokens int64, kind string) {
+	// kind 由调用方按**原始输出**分类得到（failure.go）。放在参数里而不是在
+	// 这里猜，是因为 finish 只看得到一句话，看不到整段输出。
 	q.mu.Lock()
 
 	// 取消标记优先：用户在运行中点过取消。
@@ -566,6 +584,13 @@ func (q *Queue) finish(job *Job, state, msg string, duals []string, tokens int64
 		job.DualPDFs = duals
 	}
 	job.Error = msg
+	job.FailKind = kind
+	// 失败但分类不出来时，建议文案留空 —— 不给一个自信的错误诊断。
+	if kind != "" {
+		if hint := FailureHint(kind); hint != "" && !strings.Contains(msg, hint) {
+			job.Error = strings.TrimSpace(msg + "\n" + hint)
+		}
+	}
 
 	switch {
 	case state == StateFailed && len(duals) == 0 && strings.Contains(msg, "produced no dual"):
@@ -739,6 +764,11 @@ func (q *Queue) buildArgs(job *Job) []string {
 	if !q.cfg.AutoGlossary {
 		// 术语自动抽取是**第二遍全文档 LLM 调用**，请求量翻倍。默认关。
 		args = append(args, "--no-auto-extract-glossary")
+	}
+	// 术语表：逗号分隔的 CSV 路径列表（见 glossary.go）。
+	// 路径含逗号的情况在 Submit 阶段已被拒，这里不会失败。
+	if arg, err := glossaryArg(q.cfg.Glossaries); err == nil && arg != "" {
+		args = append(args, "--glossaries", arg)
 	}
 	if q.cfg.IgnoreCache {
 		// 见 Config.IgnoreCache：不开这个，修好一个模型再跑拿到的是旧译文。

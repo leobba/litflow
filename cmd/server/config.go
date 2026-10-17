@@ -198,6 +198,11 @@ type Config struct {
 		//
 		// 配了链就按顺序换模型（每次换仍会重新选号）；空链 = 零行为变化。
 		Chain []string `json:"chain"`
+		// Glossaries 用户术语表（CSV 路径列表）。
+		// 与 auto_glossary 是两件事：那个是自动抽取（第二遍全文档 LLM 调用，会 429），
+		// 这个是静态文件、零额外请求 —— 想提术语一致性又不想撞限流就开这个。
+		// 格式：source,target[,tgt_lng] 的 CSV，文件名即术语表名。
+		Glossaries []string `json:"glossaries"`
 		// DefaultModel 提交未带模型时的默认模型。Zotero 插件只发 {source}，
 		// 所以这一项就是它实际使用的模型 —— 留空会退回 auto（倍率浮动）。
 		DefaultModel string `json:"default_model"`

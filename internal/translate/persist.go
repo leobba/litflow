@@ -38,6 +38,7 @@ type persistedJob struct {
 	FinishedAt float64  `json:"finished_at"`
 	DualPDFs   []string `json:"dual_pdfs,omitempty"`
 	Error      string   `json:"error,omitempty"`
+	FailKind   string   `json:"fail_kind,omitempty"`
 	// 两种静默失败必须一起落盘，否则恢复后的历史会「看起来都是好的」。
 	ProducedNothing bool   `json:"produced_nothing,omitempty"`
 	Partial         bool   `json:"partial,omitempty"`
@@ -112,7 +113,8 @@ func (q *Queue) restore() {
 			Model: pj.Model, QPS: pj.QPS, State: pj.State,
 			CreatedAt: pj.CreatedAt, StartedAt: pj.StartedAt,
 			FinishedAt: pj.FinishedAt, DualPDFs: pj.DualPDFs,
-			Error: pj.Error, ProducedNothing: pj.ProducedNothing,
+			Error: pj.Error, FailKind: pj.FailKind,
+			ProducedNothing: pj.ProducedNothing,
 			Partial: pj.Partial, Warning: pj.Warning,
 			TokenTotal: pj.TokenTotal, OutputTail: pj.OutputTail,
 		}
@@ -187,7 +189,7 @@ func (q *Queue) save() {
 			ID: j.ID, Source: j.Source, OutputDir: j.OutputDir,
 			Model: j.Model, QPS: j.QPS, State: j.State,
 			CreatedAt: j.CreatedAt, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
-			DualPDFs: j.DualPDFs, Error: j.Error,
+			DualPDFs: j.DualPDFs, Error: j.Error, FailKind: j.FailKind,
 			ProducedNothing: j.ProducedNothing, Partial: j.Partial, Warning: j.Warning,
 			TokenTotal: j.TokenTotal,
 			OutputTail: tailOf(j.OutputTail, tailLimit),
