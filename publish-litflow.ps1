@@ -14,7 +14,8 @@ param(
     [string]$Owner = 'leobba',
     [string]$Repo  = 'litflow',
     [string]$Tag   = '',
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$NoProxy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,6 +80,39 @@ if ($token -notmatch '^gh[ps]_') {
     exit 1
 }
 $headers.Authorization = "Bearer $token"
+# ── 网络：git 的 443 直连可能不通，而系统代理通常通 ─────────────────────
+#
+# 实测这台机器：Invoke-WebRequest https://github.com 直连 200，但 git 报
+# 'Failed to connect to github.com port 443'。原因是两者走的网络路径不同，
+# 而 git 不读系统代理设置。加 -c http.proxy=… 之后 ls-remote 立刻通。
+#
+# 所以这里探测一次：能直连就不用代理（不经第三方），不能就退到系统代理。
+$gitProxyArgs = @()
+if (-not $NoProxy) {
+    $directOk = $false
+    try {
+        $null = git ls-remote https://github.com/git/git.git HEAD 2>&1 | Select-Object -First 1
+        $directOk = ($LASTEXITCODE -eq 0)
+    } catch { $directOk = $false }
+
+    if ($directOk) {
+        Write-Host '网络：git 可直连 GitHub' -ForegroundColor Green
+    } else {
+        $sysProxy = $null
+        $reg = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue
+        if ($reg -and $reg.ProxyEnable -eq 1 -and $reg.ProxyServer) {
+            $srv = $reg.ProxyServer
+            if ($srv -notmatch '^https?://') { $srv = 'http://' + $srv }
+            $sysProxy = $srv
+        }
+        if ($sysProxy) {
+            Write-Host "网络：git 直连不通，改用系统代理 $sysProxy" -ForegroundColor Yellow
+            $gitProxyArgs = @('-c', "http.proxy=$sysProxy", '-c', 'http.postBuffer=524288000')
+        } else {
+            Write-Host '网络：git 直连不通且未发现系统代理 —— 推送大概率会失败。' -ForegroundColor Red
+        }
+    }
+}
 Write-Host "已读到 GITHUB_TOKEN（长度 $($token.Length)）" -ForegroundColor Green
 
 # ── 版本号：tag 由源码 appVersion 派生，保证一致 ───────────────────────
@@ -164,7 +198,7 @@ Write-Host "`n推送 main …"
 git remote remove litflow-publish 2>$null | Out-Null
 git remote add litflow-publish $pushUrl
 try {
-    git push litflow-publish HEAD:main --force
+    git $gitProxyArgs push litflow-publish HEAD:main --force
     if ($LASTEXITCODE -ne 0) { throw "git push 失败（exit $LASTEXITCODE）" }
 } catch {
     Write-Host "推送失败：$_" -ForegroundColor Red
@@ -188,7 +222,7 @@ if ($existing) {
 }
 git remote add litflow-publish $pushUrl
 try {
-    git push litflow-publish $Tag
+    git $gitProxyArgs push litflow-publish $Tag
 } finally {
     git remote remove litflow-publish 2>$null | Out-Null
 }
