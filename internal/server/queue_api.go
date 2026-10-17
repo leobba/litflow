@@ -1,0 +1,316 @@
+package server
+
+// 队列 API：面板与 Zotero 插件共用的唯一一组端点。
+//
+// ## 为什么是「共用一套」而不是各一套
+//
+// 之前翻译队列有两条接入面：面板走 /panel/api/translate，插件走 /translate。
+// 两条面对同一件事（提交、轮询、取消）各写一遍，任何一处改动都要同时想两遍，
+// 而「想两遍」正是本项目反复踩到的失真来源。所以这里只留一套根路径端点，
+// 面板和插件都调它。
+//
+//	GET  /health                统一探活（含账号数与队列数）
+//	GET  /translate             列表 + 计数 + 轮换链
+//	POST /translate             提交（JSON 路径 或 multipart 上传）
+//	GET  /translate/{id}        单任务
+//	POST /translate/{id}/cancel 取消
+//
+// ## 鉴权：回环免 key，其余要 key
+//
+// 插件不带 api_key，而要求用户在 Zotero 的偏好里再填一个 key 是把「傻瓜式」
+// 直接破坏掉的一步。但一刀切免鉴权也不行：网关默认监听全部网卡，任何人能连
+// 到这台机器就能往队列里塞文件。
+//
+// 所以按来源分：
+//   - 回环（127.0.0.1 / ::1）→ 免 key。这就是「本机插件」这个场景。
+//   - 其它来源 → 必须有 key，与 /v1/* 同一套 Bearer。
+//
+// 这比现状更安全也更好用：现状是全都要 key（插件做不到），而一刀切免 key
+// 等于把队列暴露给整个局域网。
+
+import (
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/translate"
+)
+
+// queueJSON 序列化上限：这些端点收路径/参数，不收文件内容（文件走 multipart）。
+const queueJSONLimit = 1 << 20
+
+// isLoopbackRequest 判断请求是否来自本机。
+//
+// 只看 RemoteAddr：这是 TCP 层的来源，不可被请求头伪造。不看 X-Forwarded-For——
+// 那个能伪造，用它做鉴权等于把钥匙交给调用方。
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost")
+}
+
+// withQueueAuth 队列端点的鉴权：回环放行，其余按 api_key。
+func (h *Handler) withQueueAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if isLoopbackRequest(r) {
+			next(w, r)
+			return
+		}
+		if !h.apiKeyOK(r) {
+			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key",
+				"this endpoint is open to loopback only; from another host it requires the api_key")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// apiKeyOK 与 /v1/* 同口径（经 livecfg 读当前 key）。
+func (h *Handler) apiKeyOK(r *http.Request) bool {
+	want := h.loadLive().APIKey
+	if want == "" {
+		return false // 非回环 + 未配 key = 拒绝
+	}
+	got := strings.TrimSpace(strings.TrimPrefix(
+		strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
+	return got == want
+}
+
+func (h *Handler) queue() *translate.Queue { return h.cfg.Translate }
+
+// writeJSONQ 只在队列端点用：与 /v1 的 OpenAI 错误体分开，因为调用方是插件，
+// 它读的是 {"error": "..."} 这种平铺形状（见 LitFlow 契约）。
+func writeJSONQ(w http.ResponseWriter, status int, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, `{"error":"encode failed"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func writeErrQ(w http.ResponseWriter, status int, msg string) {
+	writeJSONQ(w, status, map[string]any{"error": msg})
+}
+
+// health 统一探活。
+//
+// 同时带上 LitFlow 契约里的三个字段（status/ready/models）和本网关自己的
+// （accounts/translate），因为两类调用方问的是不同的问题：
+//   - 插件问「能提交吗」→ 看 ready
+//   - 负载均衡/宿主问「健康吗」→ 看 status 码
+//
+// ready 的语义：模型目录已加载 **且** 翻译队列存在。这一条直接来自实测——
+// 目录没加载时提交会被拒（否则 pdf2zh 拿到空链，第一个请求就失败）。
+func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
+	total, healthy, _, _, _ := h.cfg.Pool.CountsDetailed()
+	models := h.cachedModelCount()
+	q := h.queue()
+	translateOn := q != nil
+	// ready 的判据是「能受理」，不是「目录已缓存」。
+	//
+	// 之前的写法把 models==0 也算不 ready，而目录缓存是懒加载的：进程刚起、
+	// 还没人请求过 /v1/models 时它就是 0。于是插件探活会看到一个「不 ready」
+	// 的健康网关，然后退到脚本回退——一个假阴性，而且只在启动后的头几秒出现，
+	// 是最难复现的那种。
+	//
+	// 真正的受理条件是：翻译队列在 + 至少一个账号此刻可服务。
+	ready := translateOn && h.cfg.Pool.ServableNow()
+	var jobs map[string]int
+	if q != nil {
+		jobs = q.Counts()
+	}
+	writeJSONQ(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"ready":   ready,
+		"models":  models,
+		"accounts": map[string]any{"total": total, "healthy": healthy},
+		"translate": map[string]any{
+			"enabled": translateOn,
+			"jobs":    jobs,
+			"chain":   h.cfg.TranslateChain,
+		},
+	})
+}
+
+// cachedModelCount 只读缓存，不打上游。
+func (h *Handler) cachedModelCount() int {
+	return len(cachedModelsSnapshot())
+}
+
+// translateList 列表 + 计数 + 轮换链。
+func (h *Handler) translateList(w http.ResponseWriter, r *http.Request) {
+	q := h.queue()
+	if q == nil {
+		writeJSONQ(w, http.StatusOK, map[string]any{
+			"configured": false, "jobs": []any{}, "counts": map[string]int{},
+			"chain": h.cfg.TranslateChain})
+		return
+	}
+	jobs := q.List(50)
+	out := make([]any, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, translate.MarshalJob(j))
+	}
+	writeJSONQ(w, http.StatusOK, map[string]any{
+		"configured": true,
+		"counts":     q.Counts(),
+		"jobs":       out,
+		"chain":      h.cfg.TranslateChain,
+	})
+}
+
+// translateSubmit 提交。两种形态：JSON 给路径，multipart 上传文件。
+func (h *Handler) translateSubmit(w http.ResponseWriter, r *http.Request) {
+	q := h.queue()
+	if q == nil {
+		writeErrQ(w, http.StatusNotImplemented,
+			"translation is not enabled (config.json translate.enabled)")
+		return
+	}
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")),
+		"multipart/form-data") {
+		h.translateUpload(w, r, q)
+		return
+	}
+
+	var body struct {
+		Source       string `json:"source"`
+		OutputDir    string `json:"output_dir"`
+		Model        string `json:"model"`
+		QPS          string `json:"qps"`
+		SkipExisting *bool  `json:"skip_existing"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, queueJSONLimit))
+	if err != nil {
+		writeErrQ(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeErrQ(w, http.StatusBadRequest, "invalid json: "+err.Error())
+			return
+		}
+	}
+	if strings.TrimSpace(body.Source) == "" {
+		writeErrQ(w, http.StatusBadRequest,
+			`source (an absolute path to a .pdf) is required, or upload a file as multipart "file"`)
+		return
+	}
+	skip := true
+	if body.SkipExisting != nil {
+		skip = *body.SkipExisting
+	}
+	job, err := q.Submit(body.Source, body.OutputDir, body.Model, body.QPS, skip)
+	if err != nil {
+		writeErrQ(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 202：接下了但没跑完。200 会让调用方以为可以直接读产出。
+	writeJSONQ(w, http.StatusAccepted, translate.MarshalJob(job))
+}
+
+// translateUpload 处理 multipart：把文件落盘再入队。
+func (h *Handler) translateUpload(w http.ResponseWriter, r *http.Request,
+	q *translate.Queue) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeErrQ(w, http.StatusBadRequest, "parse form: "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeErrQ(w, http.StatusBadRequest, `missing file field: `+err.Error())
+		return
+	}
+	defer file.Close()
+
+	name := filepath.Base(header.Filename)
+	if !strings.EqualFold(filepath.Ext(name), ".pdf") {
+		writeErrQ(w, http.StatusBadRequest, "only .pdf files are accepted")
+		return
+	}
+
+	dir := h.cfg.TranslateWorkDir
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), "wb2api-translate")
+	}
+	uploadDir := filepath.Join(dir, "uploads")
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		writeErrQ(w, http.StatusInternalServerError, "cannot create upload dir: "+err.Error())
+		return
+	}
+	// 同名覆盖：重复上传同一篇应该替换而不是堆出 (1)(2)(3)。
+	dst := filepath.Join(uploadDir, name)
+	out, err := os.Create(dst)
+	if err != nil {
+		writeErrQ(w, http.StatusInternalServerError, "cannot write upload: "+err.Error())
+		return
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		writeErrQ(w, http.StatusInternalServerError, "upload failed: "+err.Error())
+		return
+	}
+	out.Close()
+
+	job, err := q.Submit(dst, dir, r.FormValue("model"), r.FormValue("qps"), true)
+	if err != nil {
+		writeErrQ(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSONQ(w, http.StatusAccepted, translate.MarshalJob(job))
+}
+
+func (h *Handler) translateGetRoute(w http.ResponseWriter, r *http.Request) {
+	q := h.queue()
+	if q == nil {
+		writeErrQ(w, http.StatusNotImplemented, "translation is not enabled")
+		return
+	}
+	id := r.PathValue("id")
+	job := q.Get(id)
+	if job == nil {
+		writeErrQ(w, http.StatusNotFound, "no such job: "+id)
+		return
+	}
+	writeJSONQ(w, http.StatusOK, translate.MarshalJob(job))
+}
+
+func (h *Handler) translateCancelRoute(w http.ResponseWriter, r *http.Request) {
+	q := h.queue()
+	if q == nil {
+		writeErrQ(w, http.StatusNotImplemented, "translation is not enabled")
+		return
+	}
+	id := r.PathValue("id")
+	if !q.Cancel(id) {
+		writeErrQ(w, http.StatusConflict,
+			"job is not cancellable (already finished, or unknown)")
+		return
+	}
+	writeJSONQ(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+}
+
+// mustWorkDir 供日志用：把实际产出目录报出来。
+func (h *Handler) TranslateWorkDirOrTemp() string {
+	if h.cfg.TranslateWorkDir != "" {
+		return h.cfg.TranslateWorkDir
+	}
+	return filepath.Join(os.TempDir(), "wb2api-translate")
+}

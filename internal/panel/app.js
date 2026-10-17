@@ -3010,7 +3010,7 @@ function trRateText(id) {
 async function refreshTranslate() {
   let d;
   try {
-    d = await api('translate');
+    d = await apiRoot('translate');
   } catch (e) {
     if ($('trNote')) $('trNote').textContent = '读取失败：' + e.message;
     return;
@@ -3088,7 +3088,7 @@ async function refreshTranslate() {
 
   body.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    try { await api('translate/' + encodeURIComponent(b.dataset.cancel) + '/cancel', { method: 'POST' }); }
+    try { await apiRoot('translate/' + encodeURIComponent(b.dataset.cancel) + '/cancel', { method: 'POST' }); }
     catch (e) { toast('取消失败：' + e.message); }
     TR_LAST_SIG = '';
     refreshTranslate();
@@ -3120,7 +3120,7 @@ async function submitTranslate() {
   const btn = $('btnTrSubmit');
   if (btn) { btn.disabled = true; btn.textContent = '提交中…'; }
   try {
-    const j = await api('translate', {
+    const j = await apiRoot('translate', {
       method: 'POST',
       body: JSON.stringify({
         source: src,
@@ -3148,7 +3148,7 @@ async function uploadTranslate(file) {
   const k = localStorage.getItem(LS_KEY);
   const h = k ? { Authorization: 'Bearer ' + k } : {};
   try {
-    const r = await fetch('/panel/api/translate', { method: 'POST', body: fd, headers: h });
+    const r = await fetch('/translate', { method: 'POST', body: fd, headers: h });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
     toast('已上传并提交');

@@ -196,11 +196,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/usage", p.withAuth(p.usage))
 	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
-	// 翻译：与账号接口同一套鉴权。列表/详情/取消 + 两个提交形态。
-	p.mux.HandleFunc("POST /panel/api/translate", p.withAuth(p.translateSubmit))
-	p.mux.HandleFunc("GET /panel/api/translate", p.withAuth(p.translateList))
-	p.mux.HandleFunc("GET /panel/api/translate/{id}", p.withAuth(p.translateGetRoute))
-	p.mux.HandleFunc("POST /panel/api/translate/{id}/cancel", p.withAuth(p.translateCancelRoute))
+	// 翻译队列**不在这里**：它已经上移到 internal/server 的根路径
+	// /translate（见 queue_api.go），因为面板和 Zotero 插件共用同一套端点。
+	// 面板 JS 直接调根路径，所以这里不需要再挂一份。
 
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))

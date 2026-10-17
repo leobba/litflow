@@ -373,6 +373,13 @@ func main() {
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
 		// handler 侧第三道闸（global realm）：false（显式逃生门）时不列 global: 模型名。
 		GlobalEnabled: cfg.Global.Enabled,
+
+		// 队列 API（根路径 /health、/translate）：面板与 Zotero 插件共用同一套，
+		// 回环免 key、非回环要 key。放在这里而不是面板里，是因为两个调用方
+		// 用的是同一件事，各写一套必然要同时想两遍。
+		Translate:        tq,
+		TranslateWorkDir: translateWorkDir,
+		TranslateChain:   cfg.Translate.Chain,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
