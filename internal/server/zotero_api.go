@@ -136,6 +136,12 @@ func (h *Handler) zoteroPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-xpinstall")
+	// **必须禁缓存**：修好 zip 结构之后，用户重下时如果拿到浏览器缓存里的旧包，
+	// 会再次看到一模一样的「可能无法与该版本的 Zotero 兼容」，而我们两个都会
+	// 以为修复无效。这个坑不值得再踩一次。
+	w.Header().Set("Cache-Control", "no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	// attachment：浏览器直接存盘，而不是尝试渲染一个 xpi。
 	w.Header().Set("Content-Disposition",
 		`attachment; filename="`+pluginFileName+`"`)
