@@ -167,6 +167,30 @@ type Config struct {
 	// PromptText 解析后的系统提示词文本（custom/append 模式使用）。
 	PromptText string `json:"-"`
 
+	// Translate PDF 翻译子系统（可选；Enabled=false 时面板不出现该页）。
+	//
+	// 放进网关二进制而不是另开一个程序，是为了让翻译的每一次静默失败落到同一
+	// 套观测上：上游 429、账号 6004、pdf2zh 的 0 token，此后在同一个面板可见。
+	// pdf2zh_next 仍然只以子进程方式调用——它是 AGPL v3，spawn 是聚合、链接是
+	// 衍生，这条边界不能因为「合体」而破。
+	Translate struct {
+		Enabled   bool   `json:"enabled"`
+		PDF2zhExe string `json:"pdf2zh_exe"` // 空 = 从 PATH 找
+		WorkDir   string `json:"work_dir"`   // 空 = PDF 同目录
+		LangIn    string `json:"lang_in"`
+		LangOut   string `json:"lang_out"`
+		QPS       string `json:"qps"`
+		// IgnoreCache 关着快，但**做测量必须开**：pdf2zh 的 _translationcache
+		// 键是「引擎+参数+原文」，修好模型再跑会拿到旧译文，任何 A/B 都变成
+		// 一次运行和自己比（实测两次不同上游跑出 byte-identical 文本）。
+		IgnoreCache bool `json:"ignore_cache"`
+		// AutoGlossary 默认 false：第二遍全文档 LLM 调用，请求量翻倍，实测在
+		// 按会话限流的池子上直接是 429 风暴（51 个连续失败任务）。
+		AutoGlossary bool `json:"auto_glossary"`
+		TimeoutS     int  `json:"timeout_s"`   // 单个 job 的总时限
+		MaxHistory   int  `json:"max_history"` // 保留多少历史任务
+	} `json:"translate"`
+
 	Upstash struct {
 		URL   string `json:"url"`   // 空 = 纯内存模式；支持完整 rediss:// URL 或 https://xxx.upstash.io host
 		Token string `json:"token"` // url 非完整连接串时用于组装 rediss://default:<token>@<host>:6379
@@ -273,6 +297,30 @@ func Default() *Config {
 	c.Global.Enabled = true
 	c.Features.SanitizeBlacklistFingerprints = true
 	c.Prompt.Mode = "passthrough" // 缺省 passthrough：透传客户端原始 system（对齐上游；custom 由用户显式选择）
+
+	// 翻译子系统：默认 ON，但没有 pdf2zh_next 时只是「该页显示未安装」，
+	// 不会让网关起不来——一个装不了 PDF 工具的用户仍然应该能用账号管理。
+	c.Translate.Enabled = true
+	if c.Translate.LangIn == "" {
+		c.Translate.LangIn = "en"
+	}
+	if c.Translate.LangOut == "" {
+		c.Translate.LangOut = "zh-CN"
+	}
+	if c.Translate.QPS == "" {
+		// 实测：qps 3 就足以在两份文档上撞出 429 风暴。免费池按会话限流，
+		// 调高不会更快，只会更早撞墙且并行撞。
+		c.Translate.QPS = "2"
+	}
+	if c.Translate.TimeoutS <= 0 {
+		// 单个 job 的总时限，不是单请求。十页论文实测最慢 52 分钟（推理模型），
+		// 一小时是能让它跑完又不至于永远占住队列的界。
+		c.Translate.TimeoutS = 3600
+	}
+	if c.Translate.MaxHistory <= 0 {
+		c.Translate.MaxHistory = 200
+	}
+
 	c.Pool.MaxInFlight = 3
 	// MaxInFlightGlobal 缺省 2：global 域 WAF 风控更紧，压低单号并发（WAF 403 修复
 	// P1-1）；0/负数 normalize 回落默认（与 max_in_flight 的 0=不限语义不同，分档键

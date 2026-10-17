@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/translate"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
@@ -262,6 +264,56 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
+	// 翻译队列：与网关同一个进程、同一个观测面。
+	//
+	// baseURL 指回自己——翻译流量必须经过本网关，否则账号池、冷却、积分
+	// 全部形同虚设（pdf2zh 会绕过所有这些直接打上游）。
+	var tq *translate.Queue
+	translateWorkDir := cfg.Translate.WorkDir
+	if translateWorkDir == "" {
+		translateWorkDir = stateSibling(cfg.StateFile, "translated")
+	}
+	if cfg.Translate.Enabled {
+		tcfg := translate.DefaultConfig()
+		tcfg.Enabled = cfg.Translate.Enabled
+		tcfg.PDF2zhExe = cfg.Translate.PDF2zhExe
+		tcfg.WorkDir = translateWorkDir
+		tcfg.LangIn = cfg.Translate.LangIn
+		tcfg.LangOut = cfg.Translate.LangOut
+		tcfg.QPS = cfg.Translate.QPS
+		tcfg.IgnoreCache = cfg.Translate.IgnoreCache
+		tcfg.AutoGlossary = cfg.Translate.AutoGlossary
+		tcfg.TimeoutS = cfg.Translate.TimeoutS
+		tcfg.MaxHistory = cfg.Translate.MaxHistory
+		selfURL := "http://127.0.0.1" + cfg.Listen + "/v1"
+		if strings.HasPrefix(cfg.Listen, ":") {
+			selfURL = "http://127.0.0.1" + cfg.Listen + "/v1"
+		}
+		tq = translate.NewQueue(tcfg, selfURL, cfg.APIKey)
+		tq.SetOnChange(func(j *translate.Job) {
+			// 只在终态打一行：翻译一篇是几百个请求，逐阶段打印会把日志淹掉。
+			switch j.State {
+			case translate.StateDone:
+				log.Printf("[translate] done %s (%.0fs, %s)",
+					filepath.Base(j.Source), j.ElapsedS(), strings.Join(j.DualPDFs, ","))
+				if j.Partial {
+					log.Printf("[translate] !! PARTIAL %s: %s",
+						filepath.Base(j.Source), j.Warning)
+				}
+			case translate.StateFailed:
+				log.Printf("[translate] FAILED %s: %s", filepath.Base(j.Source), j.Error)
+			}
+		})
+		tq.Start()
+		defer tq.Stop()
+		log.Printf("[translate] PDF 翻译已启用；产出目录 %s", translateWorkDir)
+		if cfg.Translate.PDF2zhExe == "" {
+			log.Printf("[translate] 未配置 pdf2zh_exe —— 将从 PATH 查找 pdf2zh_next")
+		}
+	} else {
+		log.Printf("[translate] PDF 翻译已关闭")
+	}
+
 	pn := panel.New(panel.Config{
 		Pool:        p,
 		Usage:       rec,
@@ -277,6 +329,8 @@ func main() {
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
+		Translate:        tq,
+		TranslateWorkDir: translateWorkDir,
 		ConfigPath: *cfgPath,
 		LoadConfig: func() (any, error) {
 			return Load(*cfgPath)
