@@ -82,8 +82,8 @@ func (h *Handler) withQueueAuth(next http.HandlerFunc) http.HandlerFunc {
 // withQueueLog 打印每一次队列端点调用。
 //
 // 为什么值得一行日志：插件的失败形态是「点了没反应」—— 而从网关这一侧看，
-//「插件根本没发请求」和「发了但被拒」是两个完全不同的故障，此前两者都只表现为
-//「队列里没有新任务」。有了这行，一眼分开，不用猜。
+// 「插件根本没发请求」和「发了但被拒」是两个完全不同的故障，此前两者都只表现为
+// 「队列里没有新任务」。有了这行，一眼分开，不用猜。
 //
 // UA 也打出来：Zotero 的请求 UA 是可辨认的固定串，与面板及测试流量区分得开。
 func (h *Handler) withQueueLog(next http.HandlerFunc) http.HandlerFunc {
@@ -189,9 +189,9 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 		jobs = q.Counts()
 	}
 	writeJSONQ(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"ready":   ready,
-		"models":  models,
+		"status":   "ok",
+		"ready":    ready,
+		"models":   models,
 		"accounts": map[string]any{"total": total, "healthy": healthy},
 		"translate": map[string]any{
 			"enabled": translateOn,
@@ -221,10 +221,10 @@ func (h *Handler) translateList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, translate.MarshalJob(j))
 	}
 	writeJSONQ(w, http.StatusOK, map[string]any{
-		"configured": true,
-		"counts":     q.Counts(),
-		"jobs":       out,
-		"chain":      h.cfg.TranslateChain,
+		"configured":    true,
+		"counts":        q.Counts(),
+		"jobs":          out,
+		"chain":         h.cfg.TranslateChain,
 		"default_model": h.defaultModel(),
 		// 术语表状态随列表下发。它是可选功能，配错了只会被忽略 —— 不在这里
 		// 显示出来，用户就永远不知道「我配了术语表」到底生效没有。
@@ -232,7 +232,6 @@ func (h *Handler) translateList(w http.ResponseWriter, r *http.Request) {
 		// pdf2zh 是否可用。新装用户最容易卡这里，而失败要等到第一次提交
 		// 才暴露；提前一句话能省掉一整轮。
 		"pdf2zh": h.pdf2zhStatus(),
-
 	})
 }
 

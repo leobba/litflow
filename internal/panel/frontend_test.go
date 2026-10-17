@@ -880,14 +880,14 @@ process.stdout.write(JSON.stringify({
 	}
 
 	var got struct {
-		FilledGloss        []string `json:"filledGloss"`
-		FilledExe          string   `json:"filledExe"`
-		ClearedGloss       bool     `json:"clearedGlossPresent"`
-		ClearedGlossVal    []string `json:"clearedGlossValue"`
-		ClearedExePresent  bool     `json:"clearedExePresent"`
-		ClearedExeValue    string   `json:"clearedExeValue"`
-		OneGloss           []string `json:"oneGloss"`
-		OneExePresent      bool     `json:"oneExePresent"`
+		FilledGloss       []string `json:"filledGloss"`
+		FilledExe         string   `json:"filledExe"`
+		ClearedGloss      bool     `json:"clearedGlossPresent"`
+		ClearedGlossVal   []string `json:"clearedGlossValue"`
+		ClearedExePresent bool     `json:"clearedExePresent"`
+		ClearedExeValue   string   `json:"clearedExeValue"`
+		OneGloss          []string `json:"oneGloss"`
+		OneExePresent     bool     `json:"oneExePresent"`
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("解析 node 输出失败: %v\n原文: %s", err, out)

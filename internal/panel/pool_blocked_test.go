@@ -83,11 +83,11 @@ func TestAnnotatePoolBlockedSkipsUnblocked(t *testing.T) {
 // TestAnnotatePoolBlockedTolerantOfBadInput 畸形条目不能让整个列表炸掉。
 func TestAnnotatePoolBlockedTolerantOfBadInput(t *testing.T) {
 	out := []map[string]any{
-		{},                      // 没有 id
-		{"id": 12345},           // id 不是字符串
-		{"id": ""},              // 空 id
-		{"id": ":"},             // 只有分隔符
-		{"id": "cn:"},           // 前缀后为空
+		{},            // 没有 id
+		{"id": 12345}, // id 不是字符串
+		{"id": ""},    // 空 id
+		{"id": ":"},   // 只有分隔符
+		{"id": "cn:"}, // 前缀后为空
 	}
 	var asked []string
 	annotatePoolBlocked(out, func(m string) pool.ModelBlockStatus {

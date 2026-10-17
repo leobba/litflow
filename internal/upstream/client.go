@@ -1438,6 +1438,7 @@ type PromoDecl struct {
 	Window  string   // 时段描述，如 "23:00-08:00"；空=全天
 	Until   string   // 截止日期原文（RFC3339）
 }
+
 // v3ModelPromotion /v3/config data.modelPromotions 单条优惠定义（2026-09-23 实测
 // 7 条：deepseek 系错峰五折、glm-5.2 夜间五折、hy3 与 hy4-preview-f 限时免费）。
 // discount 只在部分条目上存在：有 factor 的可算生效价；「错峰使用」类只有时段

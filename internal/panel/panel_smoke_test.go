@@ -20,7 +20,6 @@ import (
 	"testing"
 )
 
-
 // stripJSComments 去掉 // 行注释与 /* */ 块注释。
 //
 // 这不是洁癖：这些断言都在 app.js 里找「某个调用在不在」，而我用来解释修复的注释
@@ -36,7 +35,7 @@ func stripJSComments(js string) string {
 	return reJSLineComment.ReplaceAllString(reJSBlockComment.ReplaceAllString(js, ""), "")
 }
 
-func srcJS() string  { return string(appJS) }
+func srcJS() string   { return string(appJS) }
 func srcHTML() string { return string(indexHTML) }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -55,9 +54,9 @@ var (
 	// stat('trStatRun', …) 就是一例：变异测试把 id 改坏后断言仍然通过，才暴露出
 	// 这个盲区。助手在这里显式登记，新增同类助手时要一并加进来。
 	reHelperID = regexp.MustCompile(`\bstat\('([^']+)'`)
-	reGetById    = regexp.MustCompile(`getElementById\("([^"]+)"\)`)
-	reHTMLID     = regexp.MustCompile(`\bid="([^"]+)"`)
-	reFuncDef    = regexp.MustCompile(`\bfunction\s+([A-Za-z_$][\w$]*)\s*\(`)
+	reGetById  = regexp.MustCompile(`getElementById\("([^"]+)"\)`)
+	reHTMLID   = regexp.MustCompile(`\bid="([^"]+)"`)
+	reFuncDef  = regexp.MustCompile(`\bfunction\s+([A-Za-z_$][\w$]*)\s*\(`)
 	// 三种赋值式定义都要认：`= function`（匿名函数）、`= (…) =>`（带括号参数）、
 	// `= x =>`（单参数裸箭头）。
 	//
@@ -71,7 +70,7 @@ var (
 	reAssignFunc = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)`)
 	// RE2 不支持后行断言 (?<!...)，所以先吃掉一个可选的前导字符再判断：
 	// 前导为 "." 说明是方法调用，不是本地函数调用。
-	reCall       = regexp.MustCompile(`(\.?)([A-Za-z_$][\w$]*)\s*\(`)
+	reCall = regexp.MustCompile(`(\.?)([A-Za-z_$][\w$]*)\s*\(`)
 )
 
 func TestEveryReferencedElementExists(t *testing.T) {
@@ -150,7 +149,7 @@ var (
 	reFnParams = regexp.MustCompile(`\bfunction\s*[A-Za-z_$\w]*\s*\(([^)]*)\)`)
 	reArrowP   = regexp.MustCompile(`\(([^()]*)\)\s*=>`)
 	reCatchP   = regexp.MustCompile(`\bcatch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)`)
-		reSingleAr = regexp.MustCompile(`(\.?)([A-Za-z_$][\w$]*)\s*=>`)
+	reSingleAr = regexp.MustCompile(`(\.?)([A-Za-z_$][\w$]*)\s*=>`)
 	reIdent    = regexp.MustCompile(`^[A-Za-z_$][\w$]*$`)
 	reSplit    = regexp.MustCompile(`[,{}\s=]+`)
 )
@@ -296,7 +295,7 @@ func TestSectionsBalanced(t *testing.T) {
 var (
 	reHTMLComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 
-	reDataSel = regexp.MustCompile(`querySelectorAll\('\[(data-[a-z-]+)\]'\)`)
+	reDataSel  = regexp.MustCompile(`querySelectorAll\('\[(data-[a-z-]+)\]'\)`)
 	reDataEmit = func(attr string) *regexp.Regexp {
 		// 生成侧可能是 data-x="，也可能在模板字符串里拼接
 		return regexp.MustCompile(`\b` + regexp.QuoteMeta(attr) + `=`)
@@ -513,7 +512,7 @@ func TestNoInlineEventHandlers(t *testing.T) {
 	html := reHTMLComment.ReplaceAllString(srcHTML(), "")
 	// 允许 <input ... onchange= 这类？不允许——本项目的 CSP 不允许内联。
 	for _, ev := range []string{"onclick=", "onchange=", "onsubmit=", "oninput=", "onkeydown="} {
-		if strings.Contains(html, `"` +ev) || strings.Contains(html, " "+ev+`"`) {
+		if strings.Contains(html, `"`+ev) || strings.Contains(html, " "+ev+`"`) {
 			// 缩窄到「在标签内作为属性出现」：形如  onclick="foo()"
 			re := regexp.MustCompile(`(?s)\b` + ev + `"[^"]*"`)
 			if re.MatchString(html) {

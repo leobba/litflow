@@ -72,7 +72,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("load config: %v", err)
 		}
-	}
+	}
 	// 相对路径锚定到配置文件所在目录，而不是进程工作目录。
 	// 不这么做：从快捷方式 / 任务计划 / cmd start / 别的终端启动时，
 	// ./auths 会解析到别处 —— 网关照常起、/health 照常 200，
@@ -353,14 +353,14 @@ func main() {
 		Live:        live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
-		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
+		ProbeFile:        stateSibling(cfg.StateFile, "output_probes.json"),
 		Translate:        tq,
 		TranslateWorkDir: translateWorkDir,
 		// 链只给面板展示用：真正的换模型逻辑在 internal/server 的选号层。
 		// 面板把它显示出来，用户才知道「模型被限流时会自动换下一个」是配在
 		// config.json 里的事实，而不是一句安慰。
 		TranslateChain: cfg.Translate.Chain,
-		ConfigPath: *cfgPath,
+		ConfigPath:     *cfgPath,
 		LoadConfig: func() (any, error) {
 			return Load(*cfgPath)
 		},

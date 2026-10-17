@@ -115,7 +115,7 @@ func (q *Queue) restore() {
 			FinishedAt: pj.FinishedAt, DualPDFs: pj.DualPDFs,
 			Error: pj.Error, FailKind: pj.FailKind,
 			ProducedNothing: pj.ProducedNothing,
-			Partial: pj.Partial, Warning: pj.Warning,
+			Partial:         pj.Partial, Warning: pj.Warning,
 			TokenTotal: pj.TokenTotal, OutputTail: pj.OutputTail,
 		}
 		switch j.State {

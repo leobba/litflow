@@ -24,11 +24,11 @@ import (
 
 // 假 pdf2zh 的行为开关（通过环境变量传给它自己）。
 const (
-	fakeModeEnv   = "LITFLOW_FAKE_PDF2ZH"
-	fakeExitEnv   = "FAKE_EXIT"
-	fakePrintEnv  = "FAKE_PRINT"
-	fakeDualEnv   = "FAKE_DUAL"   // "1" = 在源文件旁边造一份双语件
-	fakeSleepEnv  = "FAKE_SLEEP"  // 秒；用来造超时
+	fakeModeEnv  = "LITFLOW_FAKE_PDF2ZH"
+	fakeExitEnv  = "FAKE_EXIT"
+	fakePrintEnv = "FAKE_PRINT"
+	fakeDualEnv  = "FAKE_DUAL"  // "1" = 在源文件旁边造一份双语件
+	fakeSleepEnv = "FAKE_SLEEP" // 秒；用来造超时
 )
 
 // TestMain 接管进程入口。

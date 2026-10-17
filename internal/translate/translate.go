@@ -61,16 +61,16 @@ var serialQueueBodyRe = regexp.MustCompile(`(?i)Total Token Usage:\s*Total\s*(\d
 
 // Job 一个 PDF 的翻译尝试。
 type Job struct {
-	ID        string  `json:"id"`
-	Source    string  `json:"source"`
-	OutputDir string  `json:"output_dir"`
-	Model     string  `json:"model"`
-	QPS       string  `json:"qps"`
-	State     string  `json:"state"`
+	ID        string `json:"id"`
+	Source    string `json:"source"`
+	OutputDir string `json:"output_dir"`
+	Model     string `json:"model"`
+	QPS       string `json:"qps"`
+	State     string `json:"state"`
 	// FailKind 失败类别（failure.go 的常量）。空 = 未分类。
-	FailKind string `json:"fail_kind,omitempty"`
-	CreatedAt float64 `json:"created_at"`
-	StartedAt float64 `json:"started_at"`
+	FailKind   string  `json:"fail_kind,omitempty"`
+	CreatedAt  float64 `json:"created_at"`
+	StartedAt  float64 `json:"started_at"`
 	FinishedAt float64 `json:"finished_at"`
 
 	// DualPDFs 产出的双语文件（绝对路径）。
@@ -171,9 +171,9 @@ type Config struct {
 	// 让「用户在面板里选的模型」永远不生效。实测：用户选了 hy3，请求日志里
 	// 全是 auto。
 	DefaultModel string `json:"default_model"`
-	LangIn  string `json:"lang_in"`
-	LangOut string `json:"lang_out"`
-	QPS     string `json:"qps"`
+	LangIn       string `json:"lang_in"`
+	LangOut      string `json:"lang_out"`
+	QPS          string `json:"qps"`
 
 	// IgnoreCache 传给 pdf2zh 的 --ignore-cache。
 	//
@@ -336,6 +336,7 @@ type SubmitResult struct {
 	Job     *Job
 	Outcome SubmitOutcome
 }
+
 // Submit 排队一个 PDF。已在队列里（queued/running）的同一路径返回原 job，
 // 不产生第二个——Zotero 的通知会对同一次导入触发多次，重复排队等于付费翻两次。
 func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) (SubmitResult, error) {
@@ -395,13 +396,13 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 		}
 	}
 	job := &Job{
-		ID:        newID(),
-		Source:    src,
-		OutputDir: outputDir,
-		Model:     model,
-		QPS:       qps,
-		State:     StateQueued,
-		CreatedAt: nowS(),
+		ID:         newID(),
+		Source:     src,
+		OutputDir:  outputDir,
+		Model:      model,
+		QPS:        qps,
+		State:      StateQueued,
+		CreatedAt:  nowS(),
 		TokenTotal: -1,
 	}
 	// 已有产出就跳过：不是失败，但也不能什么都不说。
@@ -966,18 +967,18 @@ func MarshalJob(j *Job) map[string]any {
 		return map[string]any{"id": "", "state": "", "error": "internal: nil job"}
 	}
 	v := map[string]any{
-		"id":               j.ID,
-		"source":           j.Source,
-		"output_dir":       j.OutputDir,
-		"model":            j.Model,
-		"state":            j.State,
-		"liveness":         j.Liveness(),
-		"elapsed_s":        round1(j.ElapsedS()),
-		"created_at":       j.CreatedAt,
-		"started_at":       j.StartedAt,
-		"finished_at":      j.FinishedAt,
-		"dual_pdfs":        j.DualPDFs,
-		"error":            j.Error,
+		"id":          j.ID,
+		"source":      j.Source,
+		"output_dir":  j.OutputDir,
+		"model":       j.Model,
+		"state":       j.State,
+		"liveness":    j.Liveness(),
+		"elapsed_s":   round1(j.ElapsedS()),
+		"created_at":  j.CreatedAt,
+		"started_at":  j.StartedAt,
+		"finished_at": j.FinishedAt,
+		"dual_pdfs":   j.DualPDFs,
+		"error":       j.Error,
 		// 失败类别。界面用它决定给什么建议；error 里已附了对应的一句话，
 		// 但类别本身要单独送出去 —— 没有它，面板只能靠 match 中文文案来分类。
 		"fail_kind": j.FailKind,

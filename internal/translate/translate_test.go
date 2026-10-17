@@ -465,7 +465,6 @@ func firstLines(s string, n int) string {
 	return "  " + strings.Join(lines, "\n  ")
 }
 
-
 // logSetOutput / logOutput 包一层，把标准库 log 的输出重定向到测试缓冲区。
 // 直接调 log.SetOutput 也行，但在这组测试里出现多次，包一下读起来更清楚。
 func logSetOutput(w io.Writer) { log.SetOutput(w) }
