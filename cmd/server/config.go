@@ -189,6 +189,15 @@ type Config struct {
 		AutoGlossary bool `json:"auto_glossary"`
 		TimeoutS     int  `json:"timeout_s"`   // 单个 job 的总时限
 		MaxHistory   int  `json:"max_history"` // 保留多少历史任务
+		// Chain 跨模型轮换链（按顺序尝试）。
+		//
+		// 一个模型进入 6004 软限流后，池里**每个号对它都不可用** → 选号 nil →
+		// 503，而 pdf2zh 收到 503 只会用同一个模型重试，整篇论文卡在一个被限流
+		// 的模型上。实测：单账号处于 soft_rate 窗口时，95 请求 47 个 503，两页
+		// 论文从 104 秒变成 200 秒以上。
+		//
+		// 配了链就按顺序换模型（每次换仍会重新选号）；空链 = 零行为变化。
+		Chain []string `json:"chain"`
 	} `json:"translate"`
 
 	Upstash struct {

@@ -73,6 +73,10 @@ type Config struct {
 	Translate *translate.Queue
 	// TranslateWorkDir 上传与产出的落地目录。
 	TranslateWorkDir string
+	// TranslateChain 轮换链，**仅供面板展示**。真正的换模型逻辑在
+	// internal/server 的选号层；面板只把它显示出来，让用户知道「模型被限流时
+	// 会自动换下一个」这件事存在。
+	TranslateChain []string
 }
 
 // Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
