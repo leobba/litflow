@@ -34,6 +34,15 @@ type Config struct {
 	Upstream  *upstream.Client
 	APIKey    string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
 	MaxRotate int    // 单请求最多换号次数，默认 3
+
+	// TranslateChain 跨模型轮换链（翻译用）。
+	//
+	// 一个模型进入 6004 软限流后，池子里每个号对它都不可用 → 选号 nil → 503，
+	// 而 pdf2zh 只会用同一个模型重试，于是整篇论文卡住。实测：单账号 soft_rate
+	// 窗口内 95 个请求 47 个 503，两页论文从 104s 变 200s+。
+	//
+	// 只在请求模型是 auto（或链上成员）时启用；空链 = 零行为变化。
+	TranslateChain []string
 	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
 	Session *session.Router
 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
@@ -702,6 +711,28 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		body = rewriteModel(body, bareModel)
 	}
 
+	// 跨模型轮换（翻译链路）。
+	//
+	// 背景：一个模型进入 6004 软限流后，池子里**每个号对该模型都不可用**，选号
+	// 返回 nil，网关回 503。pdf2zh 收到 503 只会用同一个模型重试，于是整篇论文
+	// 卡在一个被限流的模型上。实测：单个账号处于 soft_rate 窗口时，95 个请求里
+	// 47 个 503，两页论文从 104 秒变成 200 秒以上。
+	//
+	// 修法：把「哪个模型」也当成链的一环。模型级阻塞时换链上的下一个模型，而不是
+	// 直接放弃——账号没有错，是那个模型此刻不可用。
+	//
+	// 只在配置了 chain 且请求的就是 auto 时启用：auto 的语义本来就是「你来挑」，
+	// 所以替它挑是兑现承诺，而不是override 一个明确点名。
+	chain := h.modelChainFor(bareModel)
+	chainIdx := 0
+	modelSwitches := 0
+
+	// 上限：每个模型都允许 MaxRotate 次换号，否则切一次模型就把换号预算吃光。
+	maxIter := h.cfg.MaxRotate * (1 + len(chain))
+	if maxIter < h.cfg.MaxRotate {
+		maxIter = h.cfg.MaxRotate
+	}
+
 	// 会话头族（issue #35）：后台按 X-Conversation-Request-ID（对话轮级）聚合请求，
 	// 官方客户端一次 user send 内所有 tool call/重试/换号复用同一个 ID。此处**轮转
 	// 循环外**生成一次，循环内每次出站原样复用 → 换号/重试/降级全部同 ID，后台不再
@@ -739,7 +770,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
 
-	for i := 0; i < h.cfg.MaxRotate; i++ {
+	for i := 0; i < maxIter; i++ {
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
 		if stickyUID != "" {
@@ -764,6 +795,26 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 两者此前都报 no_healthy_account，导致「模型不可用」被读成「号全挂了」。
 			// 在这里取一次快照，供下方错误构造区分（issue #102 附带发现 1）。
 			modelBlock = h.cfg.Pool.ModelBlocked(bareModel)
+
+			// 跨模型轮换：模型级阻塞时换链上下一个模型，而不是就此放弃。
+			//
+			// 只在 modelBlock.Blocked 时换。(a) 那种「号全挂了」换模型没有意义：
+			// 新模型同样选不到号，反而把 MaxRotate 预算烧在必然失败的尝试上。
+			if modelBlock.Blocked && chainIdx+1 < len(chain) && modelSwitches < len(chain) {
+				chainIdx++
+				modelSwitches++
+				next := chain[chainIdx]
+				log.Printf("[server] model %q is model-blocked; switching to %q (chain %d/%d)",
+					bareModel, next, chainIdx+1, len(chain))
+				bareModel = next
+				// **清空 tried**：换的是模型不是账号，同一个号对新模型完全可能可用。
+				// 不清会让轮换在第一轮就因为「所有号都试过」而空转。
+				tried = map[string]bool{}
+				// 出站 body 的 model 字段在循环外写过一次，这里必须重写，否则上游
+				// 收到的仍是那个被限流的模型名——整条链等于没生效。
+				body = rewriteModel(body, bareModel)
+				continue
+			}
 			break
 		}
 		st.uid = acct.UID

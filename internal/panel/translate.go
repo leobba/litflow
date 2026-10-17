@@ -156,7 +156,8 @@ func (p *Panel) translateList(w http.ResponseWriter, r *http.Request) {
 	q := p.translateQueue()
 	if q == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "configured": false, "jobs": []any{}, "counts": map[string]int{}})
+			"ok": false, "configured": false, "jobs": []any{},
+			"counts": map[string]int{}, "chain": p.cfg.TranslateChain})
 		return
 	}
 	jobs := q.List(50)
@@ -169,6 +170,7 @@ func (p *Panel) translateList(w http.ResponseWriter, r *http.Request) {
 		"configured": true,
 		"counts":     q.Counts(),
 		"jobs":       out,
+		"chain":      p.cfg.TranslateChain,
 	})
 }
 

@@ -307,6 +307,11 @@ func main() {
 		tq.Start()
 		defer tq.Stop()
 		log.Printf("[translate] PDF 翻译已启用；产出目录 %s", translateWorkDir)
+		if len(cfg.Translate.Chain) > 0 {
+			log.Printf("[translate] 跨模型轮换链: %v", cfg.Translate.Chain)
+		} else {
+			log.Printf("[translate] 未配置轮换链 —— 一个模型被限流时 pdf2zh 会用同一模型反复重试")
+		}
 		if cfg.Translate.PDF2zhExe == "" {
 			log.Printf("[translate] 未配置 pdf2zh_exe —— 将从 PATH 查找 pdf2zh_next")
 		}
@@ -331,6 +336,10 @@ func main() {
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
 		Translate:        tq,
 		TranslateWorkDir: translateWorkDir,
+		// 链只给面板展示用：真正的换模型逻辑在 internal/server 的选号层。
+		// 面板把它显示出来，用户才知道「模型被限流时会自动换下一个」是配在
+		// config.json 里的事实，而不是一句安慰。
+		TranslateChain: cfg.Translate.Chain,
 		ConfigPath: *cfgPath,
 		LoadConfig: func() (any, error) {
 			return Load(*cfgPath)
