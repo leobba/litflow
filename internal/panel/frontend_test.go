@@ -1092,6 +1092,70 @@ process.stdout.write(JSON.stringify(out));`
 	}
 }
 
+// TestAppJSSubmitToast 提交结果的提示文案。
+//
+// 关键是 **deduped 必须与 queued 分开说**：同源已在队列里时服务端返回的是原来
+// 那个任务，而旧代码一律说「已提交，队列串行执行」—— 用户以为排了一篇新的，
+// 实际什么都没加。
+func TestAppJSSubmitToast(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; submitToast test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function submitToast(');
+const end = src.indexOf('async function uploadTranslate');
+if (start < 0 || end < 0 || end < start) throw new Error('submitToast not found');
+const ctx = {};
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.f = submitToast;', ctx);
+const F = ctx.f;
+process.stdout.write(JSON.stringify({
+  queued: F({ outcome: 'queued', state: 'queued' }),
+  deduped: F({ outcome: 'deduped', state: 'queued' }),
+  skipped: F({ outcome: 'skipped', state: 'skipped' }),
+  // 旧服务端没有 outcome，只能靠 state
+  fallbackSkipped: F({ state: 'skipped' }),
+  fallbackQueued: F({ state: 'queued' }),
+  empty: F({}),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "submit-toast-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("submitToast node test failed: %v\n%s", err, out)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("解析 node 输出失败: %v\n原文: %s", err, out)
+	}
+
+	if got["queued"] == got["deduped"] {
+		t.Errorf("queued 与 deduped 必须说不同的话（这是 outcome 存在的理由），都是 %q", got["queued"])
+	}
+	if !strings.Contains(got["deduped"], "已经在队列") {
+		t.Errorf("deduped 要说明「没有重复排队」，实际 %q", got["deduped"])
+	}
+	if !strings.Contains(got["skipped"], "已有译文") {
+		t.Errorf("skipped 要说明为何什么都没排，实际 %q", got["skipped"])
+	}
+	// 旧服务端（无 outcome）也要能工作。
+	if !strings.Contains(got["fallbackSkipped"], "已有译文") {
+		t.Errorf("缺 outcome 时应回退到 state 判断，实际 %q", got["fallbackSkipped"])
+	}
+	if got["fallbackQueued"] != got["queued"] {
+		t.Errorf("缺 outcome 时 queued 的文案应与显式一致，实际 %q vs %q", got["fallbackQueued"], got["queued"])
+	}
+}
+
 func TestAppJSExpirySortedByExpiry(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

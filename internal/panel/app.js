@@ -3511,9 +3511,7 @@ async function submitTranslate() {
         skip_existing: $('trSkip').value === '1',
       }),
     });
-    toast(j.state === 'skipped'
-      ? '已有译文，已跳过（想重译就选「强制重译」）'
-      : '已提交，队列串行执行');
+    toast(submitToast(j));
     TR_LAST_SIG = '';
     await refreshTranslate();
   } catch (e) {
@@ -3521,6 +3519,25 @@ async function submitTranslate() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '提交翻译'; }
   }
+}
+
+/* submitToast 提交结果该说什么。
+ *
+ * 用服务端给的 outcome，而不是从 job.state 反推。两者在这里恰好相近，但
+ * **deduped 是原来分不出来的那一档**：同源已在队列里时返回的是原来那个任务，
+ * 而旧代码一律说「已提交，队列串行执行」—— 用户以为排了一篇新的，实际什么都没加。
+ *
+ * 回退到 state 是为了兼容旧服务端（面板可能连着一个没更新的网关）。
+ */
+function submitToast(j) {
+  switch (j && j.outcome) {
+    case 'queued': return '已提交，队列串行执行';
+    case 'deduped': return '这篇已经在队列里了 —— 没有重复排队（同一次导入会被通知多次）';
+    case 'skipped': return '已有译文，已跳过（想重译就选「强制重译」）';
+  }
+  return (j && j.state === 'skipped')
+    ? '已有译文，已跳过（想重译就选「强制重译」）'
+    : '已提交，队列串行执行';
 }
 
 async function uploadTranslate(file) {
@@ -3534,7 +3551,9 @@ async function uploadTranslate(file) {
     const r = await fetch('/translate', { method: 'POST', body: fd, headers: h });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
-    toast('已上传并提交');
+    // 与 submitTranslate 共用同一个判断：上传也可能命中「已有译文所以跳过」
+    //（skip_existing 恒为 true），那时说「已上传并提交」是错的。
+    toast('已上传。' + submitToast(d));
     TR_LAST_SIG = '';
     await refreshTranslate();
   } catch (e) {

@@ -133,7 +133,8 @@ func TestPdf2zhStatusIsOptional(t *testing.T) {
 	if err := os.WriteFile(pdf, []byte("%PDF"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	job, err := q.Submit(pdf, dir, "", "", false)
+	subRes, err := q.Submit(pdf, dir, "", "", false)
+	job := subRes.Job
 	if err != nil {
 		t.Fatalf("引擎缺失不该阻止入队: %v", err)
 	}

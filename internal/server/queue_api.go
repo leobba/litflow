@@ -282,8 +282,30 @@ func (h *Handler) translateSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErrQ(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// 202：接下了但没跑完。200 会让调用方以为可以直接读产出。
-	writeJSONQ(w, http.StatusAccepted, translate.MarshalJob(job))
+	writeSubmitResult(w, job)
+}
+
+// writeSubmitResult 把 Submit 的结果映射成 HTTP 响应。
+//
+// 202 的语义是「接下了、还没做完」。而 Submit 成功有三种，只有一种是「接下了」：
+//
+//	queued  真接下了        → 202
+//	deduped 返回队列里原来那个，本次没新增工作 → 200
+//	skipped 磁盘上已有译文，什么都没排队      → 200
+//
+// 旧代码一律回 202，于是 skipped 也在说「接下了」—— 调用方会去轮询一个**已经是
+// 终态**的任务。这不是理论问题：跳过是「已有译文」的常见路径，而轮询循环里
+// 没有任何东西会让它推进。
+//
+// outcome 也一并写进响应体，让调用方不必从 job.state 反推「刚才到底发生了什么」。
+func writeSubmitResult(w http.ResponseWriter, res translate.SubmitResult) {
+	status := http.StatusAccepted
+	if res.Outcome != translate.SubmitQueued {
+		status = http.StatusOK
+	}
+	body := translate.MarshalJob(res.Job)
+	body["outcome"] = string(res.Outcome)
+	writeJSONQ(w, status, body)
 }
 
 // translateUpload 处理 multipart：把文件落盘再入队。
@@ -334,7 +356,7 @@ func (h *Handler) translateUpload(w http.ResponseWriter, r *http.Request,
 		writeErrQ(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSONQ(w, http.StatusAccepted, translate.MarshalJob(job))
+	writeSubmitResult(w, job)
 }
 
 func (h *Handler) translateGetRoute(w http.ResponseWriter, r *http.Request) {

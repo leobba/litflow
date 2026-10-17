@@ -311,21 +311,46 @@ func (q *Queue) loop() {
 	}
 }
 
+// SubmitOutcome Submit 成功时的三种不同结果。
+//
+// 为什么要显式区分：这三种都返回 (job, nil)，调用方只能靠 job.State 反推自己
+// 发生了什么，而 State 是**任务的状态**、不是**这次调用的结果**。区别很实在：
+//
+//	queued  真的接下了活，接下来会有人跑它
+//	deduped 同源已在队列里，返回的是**那一个** —— 本次没有新增工作
+//	skipped 磁盘上已有译文，什么都没排队
+//
+// 旧代码把三种一律回 202 Accepted。202 的意思是「接下了、还没做完」，而 skipped
+// 恰恰是**什么都没接**。调用方据此以为排上了队，就会去轮询一个永远不会推进的
+// 任务 —— 它已经是终态了。
+type SubmitOutcome string
+
+const (
+	SubmitQueued  SubmitOutcome = "queued"
+	SubmitDeduped SubmitOutcome = "deduped"
+	SubmitSkipped SubmitOutcome = "skipped"
+)
+
+// SubmitResult 一次 Submit 的完整结果。
+type SubmitResult struct {
+	Job     *Job
+	Outcome SubmitOutcome
+}
 // Submit 排队一个 PDF。已在队列里（queued/running）的同一路径返回原 job，
 // 不产生第二个——Zotero 的通知会对同一次导入触发多次，重复排队等于付费翻两次。
-func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) (*Job, error) {
+func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) (SubmitResult, error) {
 	if !q.cfg.Enabled {
-		return nil, fmt.Errorf("translation is disabled in config")
+		return SubmitResult{}, fmt.Errorf("translation is disabled in config")
 	}
 	src, err := filepath.Abs(source)
 	if err != nil {
-		return nil, err
+		return SubmitResult{}, err
 	}
 	if st, err := os.Stat(src); err != nil || st.IsDir() {
-		return nil, fmt.Errorf("source not found: %s", src)
+		return SubmitResult{}, fmt.Errorf("source not found: %s", src)
 	}
 	if strings.ToLower(filepath.Ext(src)) != ".pdf" {
-		return nil, fmt.Errorf("not a PDF: %s", filepath.Base(src))
+		return SubmitResult{}, fmt.Errorf("not a PDF: %s", filepath.Base(src))
 	}
 	if outputDir == "" {
 		// **产出默认落在源 PDF 自己旁边**，而不是 WorkDir。
@@ -340,7 +365,7 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 		outputDir = filepath.Dir(src)
 	}
 	if outputDir, err = filepath.Abs(outputDir); err != nil {
-		return nil, err
+		return SubmitResult{}, err
 	}
 	// 解析成**实际会用的**模型，而不是占位的 "auto"。
 	//
@@ -366,7 +391,7 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 	for _, j := range q.jobs {
 		if j.Source == src && (j.State == StateQueued || j.State == StateRunning) {
 			q.mu.Unlock()
-			return j, nil
+			return SubmitResult{Job: j, Outcome: SubmitDeduped}, nil
 		}
 	}
 	job := &Job{
@@ -389,7 +414,7 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 			q.rememberLocked(job)
 			q.mu.Unlock()
 			q.changed(job)
-			return job, nil
+			return SubmitResult{Job: job, Outcome: SubmitSkipped}, nil
 		}
 	}
 	q.rememberLocked(job)
@@ -400,9 +425,9 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 	select {
 	case q.pending <- job.ID:
 	case <-q.stop:
-		return nil, fmt.Errorf("queue is shutting down")
+		return SubmitResult{}, fmt.Errorf("queue is shutting down")
 	}
-	return job, nil
+	return SubmitResult{Job: job, Outcome: SubmitQueued}, nil
 }
 
 // Get 按 id 取。**返回副本**，避免调用方与 worker 竞争。
@@ -931,6 +956,15 @@ func newID() string {
 
 // MarshalJob 给面板用：job 的可 JSON 化视图。
 func MarshalJob(j *Job) map[string]any {
+	// nil 防护：这个函数是**界面和插件唯一能看到任务的地方**，而它被 HTTP 处理
+	// 路径直接调用。一个 nil 会变成 handler 里的 panic —— net/http 会兜住不崩
+	// 进程，但客户端拿到的是断开的连接，而不是可读的错误。
+	//
+	// 正常路径不会传 nil；真传了说明上游逻辑错了，此时返回 id 为空的形状，
+	// 让调用方走到自己的「没有 job id」分支并报出原因（插件正是这么做的）。
+	if j == nil {
+		return map[string]any{"id": "", "state": "", "error": "internal: nil job"}
+	}
 	v := map[string]any{
 		"id":               j.ID,
 		"source":           j.Source,

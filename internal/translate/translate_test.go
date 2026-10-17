@@ -124,7 +124,8 @@ func TestSubmitResolvesDefaultModel(t *testing.T) {
 	cfg.DefaultModel = "cn:hy3"
 	q := testQueue(t, cfg)
 
-	job, err := q.Submit(pdf, dir, "", "", false)
+	subRes, err := q.Submit(pdf, dir, "", "", false)
+	job := subRes.Job
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -149,7 +150,8 @@ func TestSubmitDefaultModelFallsBackToAuto(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DefaultModel = ""
 	q := testQueue(t, cfg)
-	job, err := q.Submit(pdf, dir, "", "", false)
+	subRes, err := q.Submit(pdf, dir, "", "", false)
+	job := subRes.Job
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +168,8 @@ func TestSubmitExplicitModelWins(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DefaultModel = "cn:hy3"
 	q := testQueue(t, cfg)
-	job, err := q.Submit(pdf, dir, "cn:step-5-preview", "", false)
+	subRes, err := q.Submit(pdf, dir, "cn:step-5-preview", "", false)
+	job := subRes.Job
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,13 +219,23 @@ func TestSubmitDeduplicatesInFlight(t *testing.T) {
 	os.WriteFile(pdf, []byte("%PDF"), 0o644)
 	q := testQueue(t, DefaultConfig())
 
-	j1, err := q.Submit(pdf, dir, "", "", false)
+	subRes, err := q.Submit(pdf, dir, "", "", false)
+	j1 := subRes.Job
 	if err != nil {
 		t.Fatal(err)
 	}
-	j2, err := q.Submit(pdf, dir, "", "", false)
+	// 第二次必须是 deduped，而不是又排一个 —— 这是这个端点唯一能告诉调用方
+	// 「本次没有新增工作」的方式。
+	if subRes.Outcome != SubmitQueued {
+		t.Fatalf("首次提交 outcome = %q，期望 %q", subRes.Outcome, SubmitQueued)
+	}
+	subRes2, err := q.Submit(pdf, dir, "", "", false)
+	j2 := subRes2.Job
 	if err != nil {
 		t.Fatal(err)
+	}
+	if subRes2.Outcome != SubmitDeduped {
+		t.Fatalf("重复提交 outcome = %q，期望 %q", subRes2.Outcome, SubmitDeduped)
 	}
 	if j1.ID != j2.ID {
 		t.Fatalf("同源在飞时应返回同一个任务，得到 %s 和 %s", j1.ID, j2.ID)
@@ -237,7 +250,8 @@ func TestSubmitSkipExistingWhenDualPresent(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "f.no_watermark.zh-CN.dual.pdf"), []byte("%PDF"), 0o644)
 
 	q := testQueue(t, DefaultConfig())
-	job, err := q.Submit(pdf, dir, "", "", true)
+	subRes, err := q.Submit(pdf, dir, "", "", true)
+	job := subRes.Job
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +482,8 @@ func TestCancelQueuedJob(t *testing.T) {
 	os.WriteFile(pdf, []byte("%PDF"), 0o644)
 	q := testQueue(t, DefaultConfig())
 
-	job, err := q.Submit(pdf, dir, "", "", false)
+	subRes, err := q.Submit(pdf, dir, "", "", false)
+	job := subRes.Job
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,9 +504,18 @@ func TestCancelTerminalReturnsFalse(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "c2.no_watermark.zh-CN.dual.pdf"), []byte("%PDF"), 0o644)
 
 	q := testQueue(t, DefaultConfig())
-	job, err := q.Submit(pdf, dir, "", "", true) // 已有双语件 -> skipped，直接是终态
+	// 已有双语件 → skipped，直接落终态。
+	//
+	// 断言 Outcome 而不是 State：这是**调用的结果**（什么都没排队），而 State 是
+	// 任务的状态。两者在这里恰好一致，但语义不同 —— 有了 Outcome 就不必再靠
+	// 「读一下 state 猜刚才发生了什么」。
+	subRes, err := q.Submit(pdf, dir, "", "", true)
+	job := subRes.Job
 	if err != nil {
 		t.Fatal(err)
+	}
+	if subRes.Outcome != SubmitSkipped {
+		t.Fatalf("已有双语件应 skipped，outcome = %q", subRes.Outcome)
 	}
 	if job.State != StateSkipped {
 		t.Fatalf("前置条件不成立，状态是 %s", job.State)
@@ -525,7 +549,8 @@ func TestCancelDoesNotPanicWithLocking(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		pdf := filepath.Join(dir, "loop"+itoaTest(i)+".pdf")
 		os.WriteFile(pdf, []byte("%PDF"), 0o644)
-		job, err := q.Submit(pdf, dir, "", "", false)
+		subRes, err := q.Submit(pdf, dir, "", "", false)
+		job := subRes.Job
 		if err != nil {
 			t.Fatal(err)
 		}
