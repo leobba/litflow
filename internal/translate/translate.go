@@ -859,8 +859,39 @@ func (q *Queue) buildArgs(job *Job) []string {
 //
 // 按**源文件名 stem** 匹配，而不是 glob 所有 *.dual.pdf：后者会把磁盘上
 // 上一次运行的产物当成本次结果报出去。
+// isDualOutputName 判断一个文件名是否是 pdf2zh 的双语产出。
+//
+// 清单必须与插件 dualsync.js 的 isDualFilename 逐条一致 —— 两端判定不同就会
+// 出错，而且两个方向都是静默的：
+//
+//	网关认、插件不认 → 插件挂不上附件，用户看到「翻译完成但 Zotero 里没东西」
+//	插件认、网关不认 → 成功的翻译被报成 produced_nothing
+//
+// 尤其不能只说「文件名含 dual」：论文标题本来就可能含 dual
+// （实测有 "... as dual-stimuli-responsive carriers ..."），而双语件按设计生成在
+// **源文件同一个目录**里 —— 于是源文件自己会被当成本次产出。那是本项目最贵的
+// 一种错：什么都没译，却被报成 done。
+func isDualOutputName(name string) bool {
+	low := strings.ToLower(name)
+	if !strings.HasSuffix(low, ".pdf") {
+		return false
+	}
+	switch {
+	case strings.HasSuffix(low, ".dual.pdf"):
+		return true
+	case strings.HasSuffix(low, "-dual.pdf"):
+		return true
+	case strings.HasSuffix(low, "-side_by_side.pdf"):
+		return true
+	case strings.Contains(low, "no_watermark.zh") && strings.Contains(low, "dual"):
+		return true
+	}
+	return false
+}
+
 func findDualPDFs(dir, source string) []string {
 	stem := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
+	srcName := filepath.Base(source)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -871,10 +902,15 @@ func findDualPDFs(dir, source string) []string {
 		if e.IsDir() || !strings.HasPrefix(name, stem) {
 			continue
 		}
-		low := strings.ToLower(name)
-		if strings.Contains(low, "dual") && strings.HasSuffix(low, ".pdf") {
-			out = append(out, filepath.Join(dir, name))
+		// 源文件自身永远不是「本次产出」。缺这一条时，标题里带 dual 的论文会被
+		// 判成「已有双语件」，于是翻译被跳过，或空跑一次后被报成功。
+		if name == srcName {
+			continue
 		}
+		if !isDualOutputName(name) {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name))
 	}
 	sort.Strings(out)
 	return out
