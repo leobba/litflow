@@ -285,6 +285,7 @@ func main() {
 		tcfg.AutoGlossary = cfg.Translate.AutoGlossary
 		tcfg.TimeoutS = cfg.Translate.TimeoutS
 		tcfg.MaxHistory = cfg.Translate.MaxHistory
+		tcfg.DefaultModel = cfg.Translate.DefaultModel
 		selfURL := "http://127.0.0.1" + cfg.Listen + "/v1"
 		if strings.HasPrefix(cfg.Listen, ":") {
 			selfURL = "http://127.0.0.1" + cfg.Listen + "/v1"

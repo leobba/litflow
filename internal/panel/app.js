@@ -7,7 +7,10 @@ let overviewData = null, cfgLoaded = null;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
-let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
+let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default',
+  // 本地关掉的模型默认藏起来。用户关掉一个模型的目的是不再看到它 ——
+  // 关掉之后仍留在列表里，等于没关。
+  hideDisabled: true };
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let reqFilter = { q: '', outcome: '' };
 let reqEntries = [];
@@ -688,6 +691,7 @@ function mdSearchText(m) {
 // mdMatch 单个模型是否满足全部筛选条件。
 function mdMatch(m, f) {
   f = f || mdFilter;
+if (f.hideDisabled && m.disabled) return false;
   if (f.q) {
     const text = mdSearchText(m);
     // 空格分词后逐个匹配：多关键词是 AND，便于"cn 视觉"这类组合查询。
@@ -738,7 +742,11 @@ function mdRowHtml(m, pr) {
   if (m.supports_reasoning && !m.can_disable_thinking) caps.push('<span class="tag warn">思考常开</span>');
   const capHtml = caps.length ? '<div class="id" style="margin-top:2px">' + caps.join(' ') + '</div>' : '';
   const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
-  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
+  // 开关放在名字格里：不改表头、不动 colspan，七个既有列的含义保持原样。
+  const toggle = '<button class="xs" style="margin-top:4px" data-mdtoggle="' +
+    esc(m.id) + '" data-mdnext="' + (m.disabled ? '0' : '1') + '">' +
+    (m.disabled ? '启用' : '关闭') + '</button>';
+  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + toggle + '</td>' +
     '<td class="num">' + rateCell(m) + '</td>' +
     '<td>' + (m.default_effort ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
     '<td class="efs" style="white-space:normal">' + effs + '</td>' +
@@ -753,6 +761,19 @@ function renderModels() {
     tb.innerHTML = '<tr><td colspan="7"><div class="empty">没有符合当前筛选条件的模型</div></td></tr>';
   } else {
     tb.innerHTML = list.map(m => mdRowHtml(m, mdProbeOf(m.id))).join('');
+    // 开关是异步写配置：先禁用按钮防连点，失败就把文案还原。
+    tb.querySelectorAll('[data-mdtoggle]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.mdtoggle, off = b.dataset.mdnext === '1';
+      b.disabled = true;
+      try {
+        await api('models/toggle', { method: 'POST', body: JSON.stringify({ id: id, disabled: off }) });
+        const mm = mdAll.find(x => x.id === id);
+        if (mm) mm.disabled = off;
+        toast(off ? '已关闭 ' + id : '已启用 ' + id);
+        renderModels();
+      } catch (e) { toast('保存失败：' + e.message); }
+      finally { b.disabled = false; }
+    });
   }
   const filtered = list.length !== mdAll.length;
   $('mdCount').textContent = !mdAll.length ? ''
@@ -778,6 +799,13 @@ for (const [id, key] of [['mdRealm', 'realm'], ['mdCap', 'cap'], ['mdEffort', 'e
   const el = $(id);
   if (!el) continue;
   el.onchange = () => { mdFilter[key] = el.value; renderModels(); };
+}
+// 「显示已关闭的」：默认不勾。勾上后已关闭的模型会重新出现（带「启用」按钮）——
+// 一个藏起来又找不回来的开关等于删除，而用户只是想让它别占位置。
+const mdShowOff = $('mdShowOff');
+if (mdShowOff) {
+  mdShowOff.checked = !mdFilter.hideDisabled;
+  mdShowOff.onchange = () => { mdFilter.hideDisabled = !mdShowOff.checked; renderModels(); };
 }
 $('mdReset').onclick = resetModelFilter;
 $('btnModels').onclick = loadModels;
@@ -2966,19 +2994,37 @@ if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
       写进它自己的请求日志，然后在「运行日志」页看起来像有人在用。 */
 
 let TR_TIMER = null;      // 轮询定时器
-let TR_MODELS = [];       // 模型目录缓存（下拉框 + 每行的倍率）
+let TR_MODELS = [];       // 模型目录缓存（下拉框 + 每行的倍率；已排除本地关闭的）
+let TR_DEFAULT_MODEL = ''; // 服务端保存的默认模型（插件也用这个）
 let TR_LAST_SIG = '';     // 上一次渲染的内容签名：没变化就不重绘，避免选中态丢失
 
 async function loadTranslate() {
-  await loadTranslateModels();
-  await refreshTranslate();
+  // 三段各自兜底、互不阻塞。此前它们串在一起：第一段一抛后面就全不执行，
+  // 表现是「卡片一直检测中」和「列表一直空」同时出现，而根因只有一个。
+  // 分开之后坏掉的只影响自己。
+  //
+  // refreshZotero 此前**根本不在这个函数里** —— 于是卡片永远停在初始的
+  // 「检测中…」，只有手动点「重新检测」才会填上。回去看代码才发现它被之前的
+  // 某次替换吃掉了，而每次测试我都是点着按钮验的，所以没发现。
+  const each = (fn, what) => Promise.resolve()
+    .then(fn)
+    .catch(e => console.warn('translate tab:', what, e));
+  await each(refreshZotero, 'zotero card');
+  await each(loadTranslateModels, 'model list');
+  await each(refreshTranslate, 'job list');
   armTranslateTimer();
 }
 
 async function loadTranslateModels() {
   try {
-    const d = await api('models');
-    TR_MODELS = (d.models || []).slice();
+    // 模型目录（含本地关闭标记）+ 当前默认模型，一次拿齐。
+    const [d, tr] = await Promise.all([
+      api('models').catch(() => ({ models: [] })),
+      apiRoot('translate').catch(() => ({})),
+    ]);
+    // 已关闭的模型不进翻译下拉。关掉它的目的就是不让它被选中。
+    TR_MODELS = (d.models || []).filter(m => !m.disabled);
+    TR_DEFAULT_MODEL = tr.default_model || 'auto';
     const sel = $('trModel');
     if (!sel) return;
     const prev = sel.value;
@@ -2991,8 +3037,24 @@ async function loadTranslateModels() {
     // 默认选「当前免费」里最靠前的那个，而不是列表第一个 —— 第一个通常是 auto，
     // 那是唯一一个不公布倍率、且文档明说会浮动的模型。选哪个模型直接决定这篇
     // 论文花多少积分，默认值不能是不受约束的那个。
+    // 预选顺序：用户上次改的（default_model）> 当前免费 > 第一个。
+    // 第一版把「列表第一个」当默认，而第一个通常就是 auto —— 那是网关里唯一
+    // 不公布倍率、且文档明说会浮动的模型。用户选了 hy3 却跑 auto，根因在这条链路。
     const free = TR_MODELS.find(m => trEffectiveRate(m) === 0);
-    sel.value = prev || (free ? free.id : (TR_MODELS[0] || {}).id) || '';
+    const known = TR_MODELS.some(m => m.id === TR_DEFAULT_MODEL);
+    sel.value = prev || (known ? TR_DEFAULT_MODEL : '') ||
+      (free ? free.id : (TR_MODELS[0] || {}).id) || '';
+    // 改选即存为默认。Zotero 插件提交时只发 {source}，不带模型 —— 所以这个
+    // 下拉框的值**就是**插件会用的模型，用户只需要在这里选一次。
+    sel.onchange = async () => {
+      try {
+        await api('translate/default-model', {
+          method: 'POST', body: JSON.stringify({ model: sel.value }),
+        });
+        TR_DEFAULT_MODEL = sel.value;
+        toast('默认模型已设为 ' + sel.value + '（Zotero 插件也用这个）');
+      } catch (e) { toast('保存默认模型失败：' + e.message); }
+    };
   } catch (e) {
     toast('读取模型失败：' + e.message);
   }

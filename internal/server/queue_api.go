@@ -110,6 +110,17 @@ func (h *Handler) apiKeyOK(r *http.Request) bool {
 
 func (h *Handler) queue() *translate.Queue { return h.cfg.Translate }
 
+// defaultModel 当前默认翻译模型；未配置时如实报 auto。
+// 面板据此预选下拉框 —— 让「我上次选的」和「插件实际会用的」是同一个值。
+func (h *Handler) defaultModel() string {
+	if q := h.queue(); q != nil {
+		if m := q.DefaultModel(); m != "" {
+			return m
+		}
+	}
+	return "auto"
+}
+
 // writeJSONQ 只在队列端点用：与 /v1 的 OpenAI 错误体分开，因为调用方是插件，
 // 它读的是 {"error": "..."} 这种平铺形状（见 LitFlow 契约）。
 func writeJSONQ(w http.ResponseWriter, status int, v any) {
@@ -192,6 +203,7 @@ func (h *Handler) translateList(w http.ResponseWriter, r *http.Request) {
 		"counts":     q.Counts(),
 		"jobs":       out,
 		"chain":      h.cfg.TranslateChain,
+		"default_model": h.defaultModel(),
 	})
 }
 
