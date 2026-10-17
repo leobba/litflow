@@ -767,6 +767,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <!-- 术语表状态。必需显示的理由：术语表配错只会被忽略而不阻断翻译，
                所以「配了未生效」和「配了且生效」在别处长得一模一样。 -->
           <div class="note" id="trGlossary" style="margin-top:7px;line-height:1.7">术语表：未配置</div>
+          <!-- pdf2zh 引擎状态。新装用户最容易卡的一步，而失败原本要等到第一次
+               提交才暴露 —— 提前一句话省掉一整轮。 -->
+          <div class="note" id="trEngine" style="margin-top:5px;line-height:1.7">翻译引擎：检测中…</div>
         </div>
 
         <!-- 队列统计：一眼看到「在跑几个、排队几个」 -->

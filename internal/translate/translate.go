@@ -724,6 +724,40 @@ func (q *Queue) spawn(job *Job) (int, string, []string, error) {
 	return code, out, findDualPDFs(job.OutputDir, job.Source), nil
 }
 
+// Enabled 翻译是否启用。界面据此区分「引擎坏了」和「这个功能我关了」——
+// 两件事对用户的含义完全不同，混成一句话会让人去修一个没坏的东西。
+func (q *Queue) Enabled() bool { return q.cfg.Enabled }
+
+// Pdf2zhStatus pdf2zh 可执行文件的体检结果，供面板提前展示。
+//
+// 为什么要在界面上说：新装用户最容易卡住的一步就是 pdf2zh 没装或路径写错。
+// 现状是他点「提交翻译」，等几秒，看到一条失败 —— 而真正的信息（"这个文件
+// 不存在"）藏在任务详情里。提前一句话就能省掉这一整轮。
+//
+// 这是**可选**能力：解析失败不影响队列工作，只影响能不能真的翻译。
+type Pdf2zhStatus struct {
+	Path  string `json:"path,omitempty"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	// Source 说明这个路径是怎么来的：config（显式配置）还是 path（PATH 查找到）。
+	Source string `json:"source,omitempty"`
+}
+
+func (q *Queue) Pdf2zhStatus() Pdf2zhStatus {
+	if q.cfg.PDF2zhExe != "" {
+		exe, err := q.resolveExe()
+		if err != nil {
+			return Pdf2zhStatus{Path: q.cfg.PDF2zhExe, Error: err.Error(), Source: "config"}
+		}
+		return Pdf2zhStatus{Path: exe, OK: true, Source: "config"}
+	}
+	exe, err := q.resolveExe()
+	if err != nil {
+		return Pdf2zhStatus{Error: err.Error(), Source: "path"}
+	}
+	return Pdf2zhStatus{Path: exe, OK: true, Source: "path"}
+}
+
 func (q *Queue) resolveExe() (string, error) {
 	if q.cfg.PDF2zhExe != "" {
 		if _, err := os.Stat(q.cfg.PDF2zhExe); err != nil {

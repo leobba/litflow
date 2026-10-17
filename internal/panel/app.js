@@ -3180,6 +3180,26 @@ async function refreshTranslate() {
 		$('trGlossary').style.color = bad.length ? '#c0392b' : '';
 	}
   }
+  // pdf2zh 引擎状态。三种情况要分清：
+  //   可用      → 绿字，顺带说清路径是怎么来的（配置 / PATH）
+  //   不可用    → 红字，直接给怎么修
+  //   翻译未启用 → 不喊「引擎坏了」，因为这是另一件事
+  if ($('trEngine')) {
+	const p2 = d.pdf2zh || {};
+	const el = $('trEngine');
+	if (d.configured === false) {
+		el.textContent = '翻译引擎：翻译功能未启用（config.json 的 translate.enabled）';
+		el.style.color = '';
+	} else if (p2.ok) {
+		const how = p2.source === 'path' ? '从 PATH 找到' : '配置指定';
+		el.textContent = `翻译引擎：可用（${how}）· ${p2.path || ''}`;
+		el.style.color = '';
+	} else {
+		el.textContent = '翻译引擎：不可用 —— ' + (p2.error || '未知原因')
+			+ '。安装：pip install pdf2zh-next，然后把路径写进 config.json 的 translate.pdf2zh_exe';
+		el.style.color = '#c0392b';
+	}
+  }
   if ($('trNote')) {
     $('trNote').textContent = d.configured === false
       ? '未启用（config.json 的 translate.enabled）'

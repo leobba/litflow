@@ -134,6 +134,15 @@ func (h *Handler) glossaryStatus() []translate.GlossaryCheck {
 	return translate.CheckGlossaries(q.GlossaryFiles())
 }
 
+// pdf2zhStatus pdf2zh 可执行文件的状态。队列不存在时如实返回不可用。
+func (h *Handler) pdf2zhStatus() translate.Pdf2zhStatus {
+	q := h.queue()
+	if q == nil {
+		return translate.Pdf2zhStatus{Error: "翻译未启用", Source: "config"}
+	}
+	return q.Pdf2zhStatus()
+}
+
 // writeJSONQ 只在队列端点用：与 /v1 的 OpenAI 错误体分开，因为调用方是插件，
 // 它读的是 {"error": "..."} 这种平铺形状（见 LitFlow 契约）。
 func writeJSONQ(w http.ResponseWriter, status int, v any) {
@@ -220,6 +229,9 @@ func (h *Handler) translateList(w http.ResponseWriter, r *http.Request) {
 		// 术语表状态随列表下发。它是可选功能，配错了只会被忽略 —— 不在这里
 		// 显示出来，用户就永远不知道「我配了术语表」到底生效没有。
 		"glossaries": h.glossaryStatus(),
+		// pdf2zh 是否可用。新装用户最容易卡这里，而失败要等到第一次提交
+		// 才暴露；提前一句话能省掉一整轮。
+		"pdf2zh": h.pdf2zhStatus(),
 
 	})
 }
