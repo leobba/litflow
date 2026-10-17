@@ -1,4 +1,8 @@
 @echo off
 chcp 65001 >nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-litflow.ps1"
-pause
+title LitFlow
+echo ???? LitFlow????????...
+echo ?????????????????? stop-litflow.cmd
+ echo.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-litflow.ps1" -Watch
+if errorlevel 1 pause
