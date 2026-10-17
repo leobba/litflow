@@ -327,6 +327,39 @@ func TestDataSelectorsHaveProducers(t *testing.T) {
 // E. 回归护栏：这一轮真实坏过的两件事
 // ─────────────────────────────────────────────────────────────────────
 
+// TestEnterEnvCallsRefreshEnv 进「环境检测」页时必须真的去拉一次状态。
+//
+// 这条守的是本仓库丢过好几次的那个形态：视图切换里忘了调刷新函数，页面就永远
+// 停在「检测中…」。当年 refreshZotero() 被某次替换吃掉，翻译页那张卡片一直是
+// 空白，而所有测试都是绿的 —— 因为没有任何断言管「进页面时该调什么」。
+//
+// 断言「被调用」（后面紧跟 `(`），不是「出现过」：后者会被解释性注释满足，
+// 而注释写着「这里应该调 refreshEnv()」恰恰是最容易发生的情形。
+func TestEnterEnvCallsRefreshEnv(t *testing.T) {
+	js := stripJSComments(srcJS())
+
+	if !strings.Contains(js, "async function refreshEnv(") {
+		t.Fatal("找不到 refreshEnv —— 环境检测页会一直停在初始状态")
+	}
+
+	i := strings.Index(js, "function go(")
+	if i < 0 {
+		t.Fatal("找不到 go()")
+	}
+	// 终点用行首的 `}`（函数体收尾）。之前用 "\n  }" 会先撞上 go() 内部
+	// `if (tabs) {…}` 的收尾，切片在刷新派发之前就断了 —— 断言于是误报「没调用」。
+	// 第一版就是这么红的；红得对（它逼我去看真代码），但理由是我切错了。
+	end := strings.Index(js[i:], "\n}")
+	if end < 0 {
+		t.Fatal("go() 没有找到收尾")
+	}
+	body := js[i : i+end]
+	if !strings.Contains(body, "refreshEnv(") {
+		t.Errorf("go() 里没有调用 refreshEnv() —— 点进「环境检测」不会重新检测，\n"+
+			"用户看到的永远是上一次(或初始)的结论。\n  实际 go() 片段：\n%s", body)
+	}
+}
+
 // TestLoadTranslateRefreshesZotero 直接钉住一个真实回归：
 // refreshZotero() 曾在某次编辑里从 loadTranslate() 消失，卡片于是永远停在
 // 「检测中…」，而每次人工测试我都点了刷新按钮，所以没发现。

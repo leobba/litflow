@@ -60,6 +60,28 @@ body {
 .nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
 .nav a svg { width: 15px; height: 15px; flex: none; opacity: .85; }
 .nav .sig { padding: 12px 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--ink-3); }
+
+/* ── 账号管理的顶部 tab 条 ─────────────────────────────────────────────
+   为什么把 5 个子页从侧边栏搬到这里：账号池/用量/积分构成/任务中心/模型与档位
+   原本各占侧边栏一格，8 个同级入口把「PDF 翻译 / 配置 / 运行日志」压成了同一层
+   噪声，用户找不到它们。收进「账号管理」之后侧边栏只剩 5 个一级入口，
+   而这 5 个子页仍然各自是一个完整视图（section 不合并），切换仍是同一个 go()。
+
+   为什么是下划线式而不是 .vtabs 的胶囊式：这是**页面级**导航（决定了整屏换什么），
+   胶囊式在本项目里表示的是页内筛选（用量的按账号/按模型）。两种语义在视觉上分开，
+   用户才不会把「按模型」当成一个页面。 */
+.actabs {
+  display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
+  padding: 10px 24px 0; background: var(--surface);
+  border-bottom: 1px solid var(--line); position: sticky; top: 49px; z-index: 15;
+}
+.actabs button {
+  padding: 7px 14px 9px; border: none; border-radius: 0; background: transparent;
+  color: var(--ink-3); font: 550 13px var(--sans); cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.actabs button:hover:not(:disabled) { color: var(--ink); border-color: transparent; }
+.actabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
 .nav .sig .row { display: flex; align-items: center; gap: 7px; }
 /* 日志频道筛选 chips */
 .chips { display: inline-flex; gap: 4px; align-items: center; }
@@ -674,6 +696,45 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   #view-translate .state.warn { color: var(--warn); }
   #view-translate .state.mute { color: var(--ink-3); }
 
+  /* ── 环境检测视图 ───────────────────────────────────────────────────
+     这一页要回答的只有一个问题：「还差什么才能跑起来」。所以版式是
+     体检表（每项一张卡：名字 + 徽标 + 一句话怎么修），而不是说明文档。
+     卡片用网格而不是列表：四项要能一屏扫完，竖着排会让人以为下面还有。 */
+  #view-env .ev-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+  }
+  @media (max-width: 900px) { #view-env .ev-grid { grid-template-columns: minmax(0, 1fr); } }
+  #view-env .ev-card {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
+    padding: 13px 15px; min-width: 0;
+  }
+  #view-env .ev-hd { display: flex; align-items: center; gap: 10px; }
+  #view-env .ev-hd .tag { margin-left: auto; flex: none; }
+  #view-env .ev-nm { font-weight: 600; font-size: 13.5px; }
+  #view-env .ev-desc { margin-top: 6px; font-size: 11.5px; line-height: 1.6; color: var(--ink-3); }
+  #view-env .ev-fix { margin-top: 6px; font-size: 12.5px; line-height: 1.65; color: var(--ink-2); }
+  #view-env .ev-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  #view-env .ev-lb { font-size: 12px; font-weight: 600; color: var(--ink-2); flex: none; }
+  /* header 之外的下拉仍要按内容取宽：全局 select 是 width:100%（配置表单整行用），
+     在这一行里会把后面的说明文字挤到下一行、把短选项拉成一整条。 */
+  #view-env .ev-row select { width: auto; max-width: 100%; }
+  #view-env .ev-hint { font-size: 11.5px; line-height: 1.65; color: var(--ink-3); }
+  #view-env .ev-url {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; font: 11.5px/1.6 var(--mono); word-break: break-all;
+    color: var(--ink-2); user-select: all; margin-bottom: 8px;
+  }
+  /* 探测结果三态用颜色区分：能下（绿）/ 还没传完（红）/ 问不到（黄）。
+     黄色这一档是常态（面板 CSP 只允许同源请求），必须和「坏了」分开。 */
+  #view-env .ev-state { font-size: 12.5px; line-height: 1.65; color: var(--ink-3); margin-bottom: 8px; }
+  #view-env .ev-state.ok { color: var(--ok); }
+  #view-env .ev-state.warn { color: var(--warn); }
+  #view-env .ev-state.bad { color: var(--bad); }
+  #view-env .ev-meta { font-size: 11.5px; color: var(--ink-3); margin-bottom: 12px; }
+  #view-env .ev-steps { margin: 0 0 10px 18px; font-size: 12.5px; line-height: 1.85; color: var(--ink-2); }
+
 </style>
 </head>
 <body>
@@ -683,24 +744,20 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="name">WorkBuddy2API</div>
       <div class="sub" id="navSub">控制台</div>
     </div>
+    <!-- 侧边栏只保留 5 个**一级入口**。原来这里是 8 项平铺（账号池/用量/积分构成/
+         任务中心/PDF 翻译/模型与档位/配置/运行日志），结果是「账号管理」这件事被拆成
+         5 个互不相干的格子，而翻译/配置/日志被埋在中间找不到。
+         子页入口移到下面 .actabs 的 tab 条上（同一个 go() 机制）。 -->
     <ul>
       <li><a href="#accounts" data-view="accounts" class="on">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
-        账号池</a></li>
-      <li><a href="#usage" data-view="usage">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.5 13.5V8.2M8 13.5V3.5M11.5 13.5v-3"/></svg>
-        用量</a></li>
-      <li><a href="#packages" data-view="packages">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.2 5.4 8 2.5l5.8 2.9v5.2L8 13.5l-5.8-2.9z"/><path d="M2.2 5.4 8 8.3l5.8-2.9M8 8.3v5.2"/></svg>
-        积分构成</a></li>
-      <li><a href="#taskscenter" data-view="taskscenter">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h10v9H8l-3 3v-3H3z"/><path d="M6 6.5h4M6 9h2.5"/></svg>
-        任务中心</a></li>
+        账号管理</a></li>
       <li><a href="#translate" data-view="translate">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 2.5h8l3 3v8h-11z"/><path d="M10.5 2.5v3h3"/><path d="M5 8.5h6M5 11h4"/></svg>
-        PDF 翻译</a></li>      <li><a href="#models" data-view="models">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
-        模型与档位</a></li>
+        PDF 翻译</a></li>
+      <li><a href="#env" data-view="env">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8l5 1.9v4.2c0 2.9-2 4.9-5 6.3-3-1.4-5-3.4-5-6.3V3.7z"/><path d="M5.7 8.1l1.6 1.6 3.1-3.3"/></svg>
+        环境检测</a></li>
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
@@ -725,6 +782,17 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       </button>
       <button id="btnRefresh">刷新</button>
       <button class="primary" id="btnAdd">添加账号</button>
+    </div>
+
+    <!-- 账号管理的顶部 tab 条。它是「账号管理」这个一级入口的**子导航**，
+         不是第 9 个视图：go() 只按 data-view 切 section，这里不引入第二套状态机。
+         默认 hidden，由 go() 按当前视图是否属于账号管理来显隐。 -->
+    <div class="actabs" id="accTabs" hidden>
+      <button type="button" data-view="accounts" class="on">账号池</button>
+      <button type="button" data-view="usage">用量</button>
+      <button type="button" data-view="packages">积分构成</button>
+      <button type="button" data-view="taskscenter">任务中心</button>
+      <button type="button" data-view="models">模型与档位</button>
     </div>
 
     <!-- 账号池 -->
@@ -965,6 +1033,101 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
       </div>
     </section>
+
+    <!-- 环境检测
+         为什么单独一页：Zotero 插件、pdf2zh 引擎、术语表这三项原本散在「PDF 翻译」
+         页的运行环境块与 config.json 里，而它们恰恰是新装用户唯一会卡住的地方 ——
+         「翻译没反应」的原因永远是这三项之一。把体检结果与补齐入口放到同一屏，
+         用户才可能自己修好，而不是来问「为什么点了没反映」。
+         数据全部来自现成接口（/panel/api/zotero/status 与 /translate），不新增后端。 -->
+    <section class="view" id="view-env" hidden>
+      <div class="box">
+        <header>
+          <h3>运行环境体检 <span class="hint">每项都给出「现在是什么状态」和「缺了该怎么办」</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="envNote">—</span>
+          <button class="xs primary" id="btnEnvCheck">重新检测</button>
+        </header>
+        <div class="pad">
+          <!-- 静态骨架而不是 JS 现画：接口没回来（或 JS 加载失败）时这一页仍有内容，
+               不至于给出一张白纸 —— 「空页面」和「一切都好」在视觉上必须分开。 -->
+          <div class="ev-grid">
+            <div class="ev-card">
+              <div class="ev-hd"><span class="ev-nm">Zotero 本体</span><span class="tag mute" id="envTagZotero">检测中…</span></div>
+              <div class="ev-desc">探活本机 23119 端口。它不装，插件没有宿主；只装插件也用不了。</div>
+              <div class="ev-fix" id="envFixZotero">—</div>
+            </div>
+            <div class="ev-card">
+              <div class="ev-hd"><span class="ev-nm">Dual Sync 插件</span><span class="tag mute" id="envTagPlugin">检测中…</span></div>
+              <div class="ev-desc">读 Zotero 自己的扩展数据库，判断已安装还是已启用 —— 只报「有安装包」会误导。</div>
+              <div class="ev-fix" id="envFixPlugin">—</div>
+            </div>
+            <div class="ev-card">
+              <div class="ev-hd"><span class="ev-nm">pdf2zh 翻译引擎</span><span class="tag mute" id="envTagEngine">检测中…</span></div>
+              <div class="ev-desc">按 config.json 的 translate.pdf2zh_exe 找，留空则从 PATH 找 pdf2zh_next。</div>
+              <div class="ev-fix" id="envFixEngine">—</div>
+            </div>
+            <div class="ev-card">
+              <div class="ev-hd"><span class="ev-nm">术语表（可选）</span><span class="tag mute" id="envTagGloss">检测中…</span></div>
+              <div class="ev-desc">配错的术语表不会阻断翻译，只会静默不生效 —— 所以必须在这里说出来。</div>
+              <div class="ev-fix" id="envFixGloss">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 插件安装入口 -->
+      <div class="box">
+        <header>
+          <h3>Dual Sync 插件 <span class="hint">装一次；之后在 Zotero 里选中文献即可提交翻译</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="envPluginNote">—</span>
+          <button class="xs primary" id="btnEnvPlugin">下载插件</button>
+        </header>
+        <div class="pad">
+          <ol class="ev-steps">
+            <li>点右上「下载插件」，xpi 会落到浏览器的下载目录。</li>
+            <li>打开 Zotero → 工具 → 插件。</li>
+            <li>右上角齿轮 → Install Add-on From File…，选中刚下载的 xpi。</li>
+            <li>重启 Zotero。菜单里出现「Dual Sync：翻译选中条目」即为成功。</li>
+          </ol>
+          <div class="ev-hint" id="envPluginHint">—</div>
+        </div>
+      </div>
+
+      <!-- pdf2zh 安装入口 -->
+      <div class="box">
+        <header>
+          <h3>pdf2zh 翻译引擎 <span class="hint">真正干活的进程；网关只做队列与调度，不链接它的代码</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="envDlNote">—</span>
+          <button class="xs" id="btnEnvCheckAsset">检查安装包</button>
+          <button class="xs primary" id="btnEnvDownload">下载 pdf2zh</button>
+        </header>
+        <div class="pad">
+          <div class="ev-row">
+            <span class="ev-lb">下载线路</span>
+            <select id="envMirror" class="xs" aria-label="下载线路">
+              <option value="ghfast" selected>ghfast.top（实测最快）</option>
+              <option value="ghproxy">ghproxy.net</option>
+              <option value="gh-proxy">gh-proxy.com</option>
+              <option value="llkk">gh.llkk.cc</option>
+              <option value="direct">直连 GitHub（最慢但最可靠）</option>
+            </select>
+            <span class="ev-hint">加速站是第三方服务，可用性不由本项目保证；它们都挂的时候直连是唯一还通的路。</span>
+          </div>
+          <div class="ev-url" id="envDlUrl"></div>
+          <div class="ev-state" id="envAssetState">—</div>
+          <div class="ev-meta">约 592 MB，解压后约 1.2 GB · AGPL-3.0 · 只以子进程方式调用，不修改也不链接它的代码</div>
+          <ol class="ev-steps">
+            <li>下载 zip 后解压到一个固定目录（别留在「下载」里，它会被清理）。</li>
+            <li>把解压目录里的 pdf2zh_next.exe 绝对路径填进「配置 → 翻译 → pdf2zh 可执行文件」，保存并重启网关。</li>
+            <li>回到本页点「重新检测」——上面那一项应该变绿。留空配置也可以：把解压目录加进 PATH，网关会自己找到它。</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
     <section class="view" id="view-models" hidden>
       <div class="box">
         <header>

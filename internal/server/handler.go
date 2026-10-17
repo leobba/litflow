@@ -177,6 +177,9 @@ func NewHandler(cfg Config) *Handler {
 	// update.json 必须**免鉴权**：Zotero 在安装/更新检查时自己去拉它，不带任何头。
 	// 只暴露一个静态清单，不含账号信息。
 	h.mux.HandleFunc("GET /panel/api/zotero/update.json", h.zoteroUpdate)
+	// pdf2zh 安装包可达性探测。放在后端是因为面板的 CSP 是 connect-src 'self'，
+	// 浏览器不允许跨站 HEAD —— 实测那条探测在真浏览器里永远走降级分支。
+	h.mux.HandleFunc("GET /panel/api/pdf2zh/asset", h.withAuth(h.pdf2zhAsset))
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}

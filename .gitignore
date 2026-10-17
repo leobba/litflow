@@ -29,11 +29,13 @@ backups/
 LOOP.md
 PLAN.md
 SPEC.md
-docs/
 
 # 设计/计划文档（但 README.md 必须进版本库）
 *.md
 !README.md
+# docs/ 放行：QUICKSTART、GLOSSARY 这些是**产品文档**，不是设计草稿。
+# 一直被 *.md 连带忽略，导致新克隆的人拿不到安装与术语表说明。
+!docs/*.md
 
 # Windows binaries
 /wb2api.exe

@@ -74,7 +74,12 @@ pdf2zh_next（PDF 翻译引擎）不在这个包里，原因有两个：
      而不承担对应的源码提供义务。
   2. 它的运行环境约 850 MB，独立一个目录更合理。
 
-装法：
+装法（二选一）：
+
+  A) 从面板「环境检测」页点「下载 pdf2zh」（走加速线路，约 592 MB）
+     直链 https://github.com/leobba/litflow/releases/download/pdf2zh-v2.9.0/
+          pdf2zh-v2.9.0-BabelDOC-v0.6.4-with-assets-win64.zip
+  B) pip install pdf2zh-next
     pip install pdf2zh-next
   然后在 config.json 的 translate.pdf2zh_exe 里填它的绝对路径，例如
     "D:\\\\zotero-pdf2zh\\\\server\\\\zotero-pdf2zh-next-venv\\\\Scripts\\\\pdf2zh_next.exe"

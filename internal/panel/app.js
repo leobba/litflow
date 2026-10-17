@@ -368,11 +368,34 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', translate: 'PDF 翻译', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号管理', usage: '用量', packages: '积分构成', taskscenter: '任务中心', translate: 'PDF 翻译', models: '模型与档位', env: '环境检测', config: '配置', logs: '运行日志' };
+
+/* 「账号管理」收进来的 5 个子页。这份清单是**唯一的**分组事实来源：
+   侧边栏该高亮哪个一级入口、顶部 tab 条该不该出现、当前 tab 是不是选中，
+   全从它推出来 —— 抄成三份迟早会出现「导航高亮在 A、内容在 B」。 */
+const ACC_VIEWS = ['accounts', 'usage', 'packages', 'taskscenter', 'models'];
+const NAV_PARENT = {
+  accounts: 'accounts', usage: 'accounts', packages: 'accounts',
+  taskscenter: 'accounts', models: 'accounts',
+  translate: 'translate', env: 'env', config: 'config', logs: 'logs',
+};
+
 function go(v) {
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
-  document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
+  // 侧边栏高亮按**一级入口**算：站在「用量」上时该亮的是「账号管理」。
+  // 直接比对 a.dataset.view === v 的话，进子页后整个侧边栏会一个都不亮，
+  // 用户会以为当前页不属于任何入口。
+  const parent = NAV_PARENT[v] || v;
+  document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === parent));
+  // 顶部 tab 条只在账号管理这 5 个子页出现；其余页面收起来，
+  // 否则「环境检测」页顶上会挂着一条与它无关的账号导航。
+  const tabs = $('accTabs');
+  if (tabs) {
+    tabs.hidden = ACC_VIEWS.indexOf(v) < 0;
+    document.querySelectorAll('.actabs button')
+      .forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  }
   $('ttl').textContent = TITLES[v];
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
@@ -380,12 +403,16 @@ function go(v) {
   if (v === 'usage') loadUsage();
   if (v === 'translate') loadTranslate();
   if (v === 'packages') loadPackages();
+  if (v === 'env') refreshEnv();
   // 到期提醒卡片：默认可见，进页面即用 overview 快照渲染（零上游请求，随首页统计
   // 每轮刷新）。不再「打开账号池就打上游」——逐账号实时查在账号多时会卡死面板。
   // 完整逐包明细由卡片上的「检查」按钮显式触发（loadPackages/loadExpiry）。
   if (v === 'taskscenter') reattachQueueView();
 }
 document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
+// tab 条走同一套 data-view 机制：不额外维护「当前子页」变量，
+// 否则深链 #usage 与点 tab 会各写一份状态、并迟早不一致。
+document.querySelectorAll('.actabs button').forEach(b => b.onclick = () => { go(b.dataset.view); history.replaceState(null, '', '#' + b.dataset.view); });
 /* 首次进入延到本轮脚本求值之后再 go()。
    原因：go() 会同步触发视图的数据加载（loadUsage/loadLogs/loadPackages…），而这些
    函数读到的模块级 let/const（usageRateWarmAt、PK_* 等）在文件后半段才初始化——
@@ -3593,11 +3620,27 @@ document.addEventListener('DOMContentLoaded', () => {
    把这两件如实显示，比编一个「已连接」诚实：用户装没装插件我们并不知道，
    而一个假装知道的界面会让真正的失败无从下手。 */
 
+/* 插件下载按钮有两个入口：翻译页的 Zotero 卡片、环境检测页的插件卡。
+   两边必须说同一句话 —— 只更新一个会出现「翻译页说已安装、环境检测页还在催你下载」，
+   而用户会同时打开这两页。所以文案/禁用态只由 syncPluginButtons 一处写。 */
+const PLUGIN_BTNS = ['btnZtDownload', 'btnEnvPlugin'];
+let lastZotero = null;      // 最近一次 /panel/api/zotero/status 的结果
+function pluginButtons() { return PLUGIN_BTNS.map($).filter(Boolean); }
+function syncPluginButtons(d) {
+  const installed = !!(d && d.plugin_installed), has = !!(d && d.plugin_present);
+  pluginButtons().forEach(b => {
+    // 装好了仍留着「下载插件」会让人以为还没装（这是原来那版的实际观感）。
+    b.textContent = installed ? '重新下载插件' : '下载插件';
+    b.disabled = !has;      // 网关上根本没有 xpi 时，点了必然报错，不如直接禁掉
+  });
+}
+
 async function refreshZotero() {
   const state = $('ztState'), hint = $('ztHint'), gate = $('ztGate');
   if (!state) return;
   try {
     const d = await api('zotero/status');
+    lastZotero = d;
     const running = !!d.zotero_running, has = !!d.plugin_present;
     const installed = !!d.plugin_installed, active = !!d.plugin_active;
     gate.textContent = '网关地址 ' + (d.gateway_url || '');
@@ -3613,9 +3656,8 @@ async function refreshZotero() {
     //「装了没启用」和「没装」区别的地方（两者的症状完全一样：菜单不在）。
     state.className = 'state ' + (installed && active ? 'ok' : (installed ? 'warn' : 'mute'));
     hint.textContent = d.hint || '';
-    const btn = $('btnZtDownload');
-    // 装好了把按钮文案改掉：留着一个「下载插件」会让人以为还没装。
-    if (btn) { btn.disabled = !has; btn.textContent = installed ? '重新下载插件' : '下载插件'; }
+    // 两个入口的按钮文案/禁用态由这里统一写（见 syncPluginButtons 的说明）。
+    syncPluginButtons(d);
   } catch (e) {
     state.textContent = '读取失败：' + e.message;
     state.className = 'state err';
@@ -3625,8 +3667,8 @@ async function refreshZotero() {
 /* 下载必须带鉴权头，所以不能用 <a href> —— 那个发不出 Bearer。
    用 fetch + blob 再触发一次本地下载，行为对用户是一样的。 */
 async function downloadZoteroPlugin() {
-  const btn = $('btnZtDownload');
-  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  const btns = pluginButtons();
+  btns.forEach(b => { b.disabled = true; b.textContent = '下载中…'; });
   try {
     const h = {};
     const k = localStorage.getItem(LS_KEY);
@@ -3654,11 +3696,220 @@ async function downloadZoteroPlugin() {
   } catch (e) {
     toast('下载失败：' + e.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '下载插件'; }
+    // 收尾回到「当前真实状态」而不是硬写「下载插件」：装过插件的用户点完之后
+    // 按钮不该退回成「还没装」的措辞。
+    syncPluginButtons(lastZotero);
   }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const b = $('btnZtDownload'); if (b) b.onclick = downloadZoteroPlugin;
   const rf = $('btnZtRefresh'); if (rf) rf.onclick = refreshZotero;
+  const eb = $('btnEnvPlugin'); if (eb) eb.onclick = downloadZoteroPlugin;
+  const ec = $('btnEnvCheck'); if (ec) ec.onclick = refreshEnv;
+  const ed = $('btnEnvDownload'); if (ed) ed.onclick = downloadPdf2zh;
+  const ea = $('btnEnvCheckAsset'); if (ea) ea.onclick = probePdf2zhAsset;
+  const em = $('envMirror');
+  if (em) em.onchange = () => {
+    // 换了线路，上一次的探测结论就不再成立 —— 先清掉，免得用户以为新线路也 404。
+    const st = $('envAssetState');
+    if (st) { st.className = 'ev-state'; st.textContent = '—'; }
+    renderEnvMirror();
+  };
+  renderEnvMirror();
 });
+
+/* ===== 环境检测页 =====
+
+   这一页只做两件事：把散在两个接口里的组件状态拼成一张体检表，以及
+   「缺什么就给什么安装入口」。它不引入任何新后端 —— Zotero 与插件看
+   /panel/api/zotero/status，pdf2zh 与术语表看 /translate 的 pdf2zh / glossaries 字段。
+
+   为什么 pdf2zh 的下载地址写死在前端而不是做成接口：它是一个静态字符串，
+   为它加一条后端路由只会多一处需要同步改的地方（发行 tag 改名时后端要重编、
+   前端不用）。 */
+
+// GitHub Release 资产（tag pdf2zh-v2.9.0）。592 MB，解压后约 1.2 GB。
+const PDF2ZH_ASSET = 'https://github.com/leobba/litflow/releases/download/pdf2zh-v2.9.0/pdf2zh-v2.9.0-BabelDOC-v0.6.4-with-assets-win64.zip';
+
+/* 加速前缀按**实测耗时**排序（HEAD 同一个资产，实测于 2026-10）：
+   ghfast.top 2133ms < ghproxy.net 2532ms < gh-proxy.com 5040ms < gh.llkk.cc 5996ms。
+   hub.gitmirror.com 当时 SSL 握手直接失败，所以不收录 —— 一个已经挂掉的镜像
+   写进候选列表，只会让用户多点一次才失败。
+   仍然保留「直连」：加速站都是第三方（个人/社区域名），哪天一起挂掉时，
+   GitHub 直连是唯一还通的路，只是慢。 */
+const PDF2ZH_MIRRORS = [
+  { id: 'ghfast', label: 'ghfast.top（实测最快）', prefix: 'https://ghfast.top/' },
+  { id: 'ghproxy', label: 'ghproxy.net', prefix: 'https://ghproxy.net/' },
+  { id: 'gh-proxy', label: 'gh-proxy.com', prefix: 'https://gh-proxy.com/' },
+  { id: 'llkk', label: 'gh.llkk.cc', prefix: 'https://gh.llkk.cc/' },
+  { id: 'direct', label: '直连 GitHub', prefix: '' },
+];
+
+// 当前线路（找不到时回落到实测最快的那条，而不是报错）。
+function pdf2zhMirror() {
+  const sel = $('envMirror');
+  const id = sel ? sel.value : 'ghfast';
+  return PDF2ZH_MIRRORS.find(m => m.id === id) || PDF2ZH_MIRRORS[0];
+}
+function pdf2zhUrl() { return pdf2zhMirror().prefix + PDF2ZH_ASSET; }
+
+// 把线路反映到界面上：完整 URL 可见（用户可以自己复制去别处下），
+// 标题栏只显示走哪条路。
+function renderEnvMirror() {
+  const m = pdf2zhMirror();
+  const url = $('envDlUrl');
+  if (url) url.textContent = pdf2zhUrl();
+  const note = $('envDlNote');
+  if (note) note.textContent = m.prefix ? '经 ' + m.label + ' 加速' : '直连 GitHub（慢）';
+}
+
+/* envItem 一次写一格体检项：徽标 + 一句话怎么修。
+   为什么把「状态」和「怎么办」放在同一个函数里：这个仓库反复出现过的形态是
+   只报状态不给动作（「插件未安装」然后呢？），用户只能去翻文档。 */
+function envItem(key, tone, label, fix) {
+  const tag = $('envTag' + key), fx = $('envFix' + key);
+  if (tag) { tag.className = 'tag ' + tone; tag.textContent = label; }
+  if (fx) fx.textContent = fix;
+}
+
+// 两个接口并行拉、各自兜底：Zotero 服务没起来时不该把 pdf2zh 那两项也一起打成「读不到」。
+async function refreshEnv() {
+  const note = $('envNote');
+  if (note) note.textContent = '检测中…';
+  const [z, t] = await Promise.all([
+    api('zotero/status').catch(e => ({ error: e.message })),
+    apiRoot('translate').catch(e => ({ error: e.message })),
+  ]);
+  renderEnvZotero(z);
+  renderEnvTranslate(t);
+  if (note) note.textContent = '检测于 ' + new Date().toLocaleTimeString();
+}
+
+function renderEnvZotero(d) {
+  const pluginNote = $('envPluginNote');
+  if (!d || d.error) {
+    // 分开写两句而不是共用一条：这两项的取数来源相同，但用户要做的事不同。
+    envItem('Zotero', 'bad', '读不到', '面板没能读到 /panel/api/zotero/status：' + ((d && d.error) || '未知错误') + '。先确认网关在运行。');
+    envItem('Plugin', 'bad', '读不到', '同上；网关没回答时无法判断插件状态。');
+    if (pluginNote) pluginNote.textContent = '网关无响应';
+    return;
+  }
+  lastZotero = d;
+  syncPluginButtons(d);
+
+  // 1) Zotero 本体
+  if (d.zotero_running) {
+    envItem('Zotero', 'ok', '运行中', '已探到本机 23119 端口。插件装好重启后，从「工具」菜单即可发起翻译。');
+  } else {
+    envItem('Zotero', 'mute', '未运行', '没探到本机 23119 端口。只装插件的话可以先不管；要用翻译时启动 Zotero 即可。');
+  }
+
+  // 2) 插件。三态必须分开：没装 / 装了没启用 / 装了且启用 ——
+  //    它们的用户可见症状完全一样（菜单里没有那一项），只有这里能区分。
+  if (!d.plugin_present) {
+    envItem('Plugin', 'bad', '安装包缺失', '网关目录里没有 dualsync@zotero.local.xpi。重装网关发行包（或把 xpi 放到 exe 同目录）即可恢复，面板无从下载。');
+  } else if (d.plugin_installed && d.plugin_active) {
+    envItem('Plugin', 'ok', '已安装并启用', '在 Zotero 里选中文献 → 工具 → 「Dual Sync：翻译选中条目」即可提交。');
+  } else if (d.plugin_installed) {
+    envItem('Plugin', 'warn', '已安装但未启用', '到 Zotero → 工具 → 插件里把它启用（或直接重启 Zotero）。停用的插件不会加载菜单。');
+  } else {
+    envItem('Plugin', 'bad', '未安装', '点下面「Dual Sync 插件」卡片里的「下载插件」，按那里的四步装进 Zotero。');
+  }
+
+  if (pluginNote) pluginNote.textContent = d.gateway_url ? '网关地址 ' + d.gateway_url : '—';
+  // 网关自己给的「下一步」提示最准确（它知道 zotero_running / installed / present 的组合），
+  // 所以直接用，不在这里再编一段。
+  const hint = $('envPluginHint');
+  if (hint) hint.textContent = d.hint || '下载 xpi 后在 Zotero 的插件页用「Install Add-on From File…」安装。';
+}
+
+function renderEnvTranslate(d) {
+  if (!d || d.error) {
+    envItem('Engine', 'bad', '读不到', '面板没能读到 /translate：' + ((d && d.error) || '未知错误') + '。网关没起来，或翻译功能被关闭。');
+    envItem('Gloss', 'mute', '读不到', '同一个响应里带的，无法单独读取。');
+    return;
+  }
+
+  // 3) pdf2zh 引擎。source 说明路径从哪来 —— 用户看到「配置指定」才知道
+  //    改路径要去 config.json，而不是去折腾 PATH。
+  const p = d.pdf2zh || {};
+  if (p.ok) {
+    const from = p.source === 'config' ? '配置文件指定' : 'PATH 查找到';
+    envItem('Engine', 'ok', '可用', '正在使用 ' + (p.path || '（未报告路径）') + '（' + from + '）。');
+  } else {
+    envItem('Engine', 'bad', '不可用', (p.error || '没找到 pdf2zh_next') + '。请到下一条「pdf2zh 翻译引擎」卡片里下载并解压，再把 pdf2zh_next.exe 的路径填进配置。');
+  }
+
+  // 4) 术语表。没配 / 全部生效 / 有失效 三种。
+  const gs = d.glossaries || [];
+  if (!gs.length) {
+    envItem('Gloss', 'mute', '未配置', '可选功能。不做术语约束可以不管；要加就在「配置 → 翻译 → 术语表」里填 CSV 绝对路径。');
+  } else {
+    const bad = gs.filter(g => !g.ok);
+    const terms = gs.reduce((n, g) => n + (g.ok ? (g.terms || 0) : 0), 0);
+    if (!bad.length) {
+      envItem('Gloss', 'ok', gs.length + ' 份生效', '共 ' + terms + ' 条词条已加载。');
+    } else {
+      envItem('Gloss', 'bad', bad.length + '/' + gs.length + ' 份失效', bad.map(g => (g.path || '') + '：' + (g.error || '不可用')).join('；') + '。文件被移动或删除后 pdf2zh 会静默忽略它。');
+    }
+  }
+}
+
+/* 安装包就绪探测。
+   为什么要有：这个 zip 有 592 MB，Release 刚建好时资产可能还在上传 —— 那时点下载
+   会落到 GitHub 的 404 页，用户只会以为「项目坏了」，而不是「再等十分钟」。
+   为什么用 HEAD：只读响应头，不会让用户白下 592 MB（lead 明确要求不要用 GET 探测）。
+   为什么会有「问不到」这一档：面板的 CSP 是 connect-src 'self'，浏览器**不允许**
+   本页向 github/加速站发任何请求，fetch 在出网前就被拦掉。这一档在生产环境是常态，
+   所以必须给一句人能读的话，而不是假装检测过、更不是把坏链丢给用户点。 */
+/* probePdf2zhAsset 确认安装包是否已经上传完成。
+ *
+ * 走**网关**而不是浏览器：面板的 CSP 是 connect-src 'self'，跨站 HEAD 会被直接
+ * 拦掉 —— 实测控制台原文就是
+ *   Connecting to 'https://ghfast.top/...' violates ... "connect-src 'self'"
+ * 于是前端自己探测永远只能走降级分支，答不出「包到底传完没有」。
+ *
+ * 网关不受 CSP 约束，所以由它代查（/panel/api/pdf2zh/asset）。那条接口对 URL
+ * 有白名单（剥掉已知加速前缀后必须逐字等于资产地址），否则它就是个 SSRF 跳板。
+ */
+async function probePdf2zhAsset() {
+  const el = $('envAssetState');
+  if (!el) return;
+  el.className = 'ev-state';
+  el.textContent = '正在确认安装包是否已上传（由网关代查）…';
+  try {
+    const d = await api('pdf2zh/asset?url=' + encodeURIComponent(pdf2zhUrl()));
+    const size = d && d.size ? '（' + Math.round(d.size / 1048576) + ' MB）' : '';
+    if (d && d.ok) {
+      el.className = 'ev-state ok';
+      el.textContent = '安装包已就绪' + size + '，点「下载 pdf2zh」即可。';
+    } else if (d && d.status === 404) {
+      // 「还没传完」和「线路坏了」必须分开说：前者让人等，后者让人换线路。
+      el.className = 'ev-state bad';
+      el.textContent = (d.hint || '安装包还没上传完成（HTTP 404）')
+        + ' —— 现在点下载只会看到 404 页面。';
+    } else {
+      el.className = 'ev-state warn';
+      el.textContent = (d && d.hint ? d.hint : '这条线路暂时不可用')
+        + (d && d.status ? '（HTTP ' + d.status + '）' : '')
+        + '。换一条线路或稍后再试。';
+    }
+  } catch (e) {
+    el.className = 'ev-state warn';
+    el.textContent = '网关没能完成探测：' + e.message
+      + '。可以直接点「下载 pdf2zh」试试；若打开的是 404 页，说明安装包还没传完。';
+  }
+}
+
+/* 打开下载。不能用 fetch —— 跨域被 CSP 拦，而且把 592 MB 读进内存毫无意义；
+   交给浏览器自己的下载器，还支持断点续传。 */
+function downloadPdf2zh() {
+  const url = pdf2zhUrl();
+  const m = pdf2zhMirror();
+  const w = open(url, '_blank', 'noopener');
+  // window.open 被弹窗拦截时 w 为 null。给一个可读的兜底：URL 就在上面那行，
+  // 用户可以自己复制 —— 这一条比 toast 里的「未知错误」有用得多。
+  if (!w) toast('浏览器拦下了新窗口：请复制上面那行地址自行下载（' + m.label + '）', 'err');
+}
+

@@ -114,7 +114,13 @@ try {
 		t.Fatal(err)
 	}
 	hf.Close()
-	for _, hash := range []string{"#taskscenter", "#accounts", "#usage", "#models", "#config", "#logs", "#packages"} {
+	// 每个一级/子视图都要跑一遍顶层求值。漏掉一个 hash，那个视图的初始化代码
+	// 就从来没被执行过 —— 「翻译页」和「环境检测页」之前就不在列表里，而
+	// 「进页面时该调什么」正是本仓库历史上丢过好几次的东西（refreshZotero）。
+	for _, hash := range []string{
+		"#accounts", "#usage", "#packages", "#taskscenter", "#models",
+		"#translate", "#env", "#config", "#logs",
+	} {
 		cmd := exec.Command(node, hf.Name(), "app.js")
 		cmd.Dir = "." // 测试工作目录 = internal/panel
 		cmd.Env = append(os.Environ(), "SMOKE_HASH="+hash)
