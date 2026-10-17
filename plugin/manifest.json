@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero Dual Sync",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Link dual (bilingual) PDFs and colour item tags. Translates via the LitFlow service, with the script backend kept as a fallback.",
   "homepage_url": "http://127.0.0.1:7863/panel/",
   "author": "local",

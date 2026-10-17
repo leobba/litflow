@@ -19,6 +19,7 @@ package server
 // 「傻瓜式」交还给资源管理器。面板里点一下就能下载，装完刷新即用。
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"io"
 	"net"
@@ -281,26 +282,79 @@ func itoa64(n int64) string {
 //
 //	{"addons": {"<id>": {"updates": [{"version","update_link"}]}}}
 func (h *Handler) zoteroUpdate(w http.ResponseWriter, r *http.Request) {
-	// 优先读发行目录里的 update.json，这样插件升级时不用重编网关。
+	// 清单必须描述**网关自己会发出去的那个 xpi**。
+	//
+	// 这里以前优先读发行目录里的 update.json。问题在于那份文件是给 GitHub
+	// Release 用的：它把 update_link 指向
+	// releases/download/<tag>/dualsync@zotero.local.xpi。于是网关下发的清单和网关
+	// 下发的包是**两个不同的产物**，而它们会漂移 —— 实测：本地升到 1.2.0、清单
+	// 也写着 1.2.0，但 GitHub 那个 tag 下的 xpi 还是 1.1.1。Zotero 会去下 1.2.0，
+	// 装完发现还是 1.1.1，然后一直重试。
+	//
+	// 所以版本从本地 xpi 的 manifest 里读、链接指回本网关：这样「说的」和「给的」
+	// 永远来自同一个文件，不可能不一致。
 	if p, err := h.resolvePluginPath(); err == nil {
-		cand := filepath.Join(filepath.Dir(p), "update.json")
-		if raw, err := os.ReadFile(cand); err == nil && len(raw) > 0 {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(raw)
+		if ver := pluginVersionFromXPI(p); ver != "" {
+			writeJSONQ(w, http.StatusOK, map[string]any{
+				"addons": map[string]any{
+					pluginID: map[string]any{
+						"updates": []any{map[string]any{
+							"version":     ver,
+							"update_link": "http://" + r.Host + "/panel/api/zotero/plugin",
+							"applications": map[string]any{
+								"zotero": map[string]any{
+									"strict_min_version": "7.0",
+									"strict_max_version": "11.*",
+								},
+							},
+						}},
+					},
+				},
+			})
 			return
 		}
 	}
-	// 兜底：内联一份「已是最新」。update_link 指回插件端点，所以即使
-	// 没带 update.json，Zotero 要升级时也能拿到包。
+	// 兜底：拿不到版本时宁可少说，也不编一个。update_link 仍然指回本端点，
+	// 所以 Zotero 要升级时还是拿得到包。
 	writeJSONQ(w, http.StatusOK, map[string]any{
 		"addons": map[string]any{
-			"dualsync@zotero.local": map[string]any{
-				"updates": []any{map[string]any{
-					"version":     "1.1.1",
-					"update_link": "http://" + r.Host + "/panel/api/zotero/plugin",
-				}},
+			pluginID: map[string]any{
+				"updates": []any{},
 			},
 		},
 	})
+}
+
+// pluginVersionFromXPI 从 xpi（就是个 zip）里读出 manifest 的 version。
+//
+// 读不到就返回空串 —— 调用方据此走「不编造版本」的兜底，而不是回一个写死的
+// 字符串让它和真包对不上。
+func pluginVersionFromXPI(path string) string {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return ""
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if f.Name != "manifest.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return ""
+		}
+		raw, err := io.ReadAll(io.LimitReader(rc, 1<<20))
+		rc.Close()
+		if err != nil {
+			return ""
+		}
+		var m struct {
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(raw, &m) != nil {
+			return ""
+		}
+		return m.Version
+	}
+	return ""
 }

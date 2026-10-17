@@ -12,16 +12,15 @@ pref("extensions.zotero.dualsync.autoTranslateMax", 3);
 // in dualsync.js is only a fallback for when this pref is absent, so editing
 // that constant alone changes nothing.
 pref("extensions.zotero.dualsync.pythonExe", "D:\\Program Files\\Python\\pythonw.exe");
-pref("extensions.zotero.dualsync.translateScript", "D:\\zotero-tools\\pdf2zh\\batch_translate_live.py");
+// 这里原来还有一个 translateScript，指向 batch_translate_live.py 的「脚本后端」。
+// 那条路已删除：脚本连的是 http://127.0.0.1:8787/v1 —— 被本网关取代、早已退役的
+// 旧面板，跑不通，而且失败只写一行日志。留着这个 pref 只会让人以为还有第二条路。
 
-// Which translation backend to drive.
-//   "litflow" - talk to the LitFlow service over HTTP. It owns the queue, so
-//               serialisation, progress and the single-instance guard live in
-//               one resident process rather than being reimplemented here.
-//   "script"  - spawn pythonw + batch_translate_live.py per item, the original
-//               behaviour.
-// Default is "litflow" WITH fallback: if the service is not answering, the
-// plugin logs it and uses the script rather than silently doing nothing.
+// 只剩一个后端了。
+//   "litflow" - 走 HTTP 找 LitFlow 服务。队列在服务里，所以串行、进度、单实例
+//               保护都由一个常驻进程负责，不在这里重写一遍。
+// 旧值 "script" 仍然可能留在升级用户的配置里；代码一律当作 litflow，否则那个
+// 残留值会让插件找不到任何可用后端，表现为彻底静默不翻译。
 pref("extensions.zotero.dualsync.backend", "litflow");
 // 7863 = LitFlow 单一软件的端口（账号管理 + 翻译 + 面板）。
   pref("extensions.zotero.dualsync.litflowUrl", "http://127.0.0.1:7863");

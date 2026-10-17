@@ -34,6 +34,10 @@
     var MENU_BACKUP_STATUS = "dualsync-menuitem-backup-status";
     var TAG_DONE = "双语已译";
     var TAG_TODO = "待翻译";
+    // 「翻译失败」标签。为什么要单独一个：在此之前，翻译失败在 Zotero 里**不留任何
+    // 痕迹** —— 后端不通、pdf2zh 报错、被限流，全都只写进日志，用户看到的是
+    // 「点了没反应」。标签是现成的可见通道：能筛选，也能一眼看出哪些该重试。
+    var TAG_FAILED = "翻译失败";
     // Zotero 7+/10 expects a hex CSS color *string* here.
     // (Zotero 6 used numeric palette indices 1-9; writing a number makes
     //  itemTreeRow.js throw `color.toLowerCase is not a function`.)
@@ -86,7 +90,6 @@
     var AUTO_TRANSLATE_PREF = "dualsync.autoTranslate";
     var TRANSLATE_MAX_PREF = "dualsync.autoTranslateMax";
     var PYTHON_PREF = "dualsync.pythonExe";
-    var SCRIPT_PREF = "dualsync.translateScript";
     // Defaults only - override in the Config Editor (they are pref-backed so
     // nothing here is a hard requirement).
     // pythonw.exe, NOT python.exe: Zotero launches this through
@@ -99,7 +102,6 @@
     // them (exec only resolves true/false), and the batch script still writes
     // progress.md / batch_log.json / logs/log_<key>.txt to disk.
     var DEFAULT_PYTHON = "D:\\Program Files\\Python\\pythonw.exe";
-    var DEFAULT_SCRIPT = "D:\\zotero-tools\\pdf2zh\\batch_translate_live.py";
     // Which backend drives translation, and where the LitFlow service lives.
     // See prefs.js for why litflow is the default and why it falls back.
     var BACKEND_PREF = "dualsync.backend";
@@ -407,6 +409,31 @@
             .catch(function () {});
     }
 
+    // markPendingFailed 把当前这一轮待办全部标成「翻译失败」。
+    //
+    // 为什么需要它：后端不可用（网关没起、或起了但没就绪）时，drainQueue 以前只是
+    // 记一行日志就返回。用户点「翻译选中条目」看到的是**什么都没发生** —— 没有报错、
+    // 没有标签、没有进度窗。而这些条目在 Zotero 里其实可辨认：它们还没有双语件。
+    // 给它们打上失败标签，用户至少知道该重试，而不是以为插件坏了。
+    //
+    // 只标 _pending 里的（= 这一轮真正在等的），不动别的条目。
+    function markPendingFailed(reason) {
+        var ids = Object.keys(_pending || {});
+        log("auto-translate: backend unavailable (" + reason + "), marking " +
+            ids.length + " item(s)");
+        return ids.reduce(function (chain, id) {
+            return chain.then(function () {
+                var n = parseInt(id, 10);
+                if (!n) return null;
+                return Zotero.Items.getAsync(n).then(function (item) {
+                    return setStatusTag(item, "failed");
+                });
+            }).catch(function () {
+                return null;
+            });
+        }, Promise.resolve());
+    }
+
     function setStatusTag(item, mode) {
         return Promise.resolve()
             .then(function () {
@@ -414,9 +441,17 @@
                 var changed = false;
                 var hasDone = !!item.hasTag(TAG_DONE);
                 var hasTodo = !!item.hasTag(TAG_TODO);
+                var hasFailed = !!item.hasTag(TAG_FAILED);
                 if (mode === "done") {
                     if (hasTodo) {
                         item.removeTag(TAG_TODO);
+                        changed = true;
+                    }
+                    // 也必须清掉「翻译失败」：失败后重试成功的条目，否则会同时
+                    // 带着「双语已译」和「翻译失败」—— 两个互相矛盾的结论并存，
+                    // 而用户按「翻译失败」筛选时看到的是已经译好的文献。
+                    if (hasFailed) {
+                        item.removeTag(TAG_FAILED);
                         changed = true;
                     }
                     if (!hasDone) {
@@ -428,8 +463,23 @@
                         item.removeTag(TAG_DONE);
                         changed = true;
                     }
+                    if (hasFailed) {
+                        item.removeTag(TAG_FAILED);
+                        changed = true;
+                    }
                     if (!hasTodo) {
                         item.addTag(TAG_TODO);
+                        changed = true;
+                    }
+                } else if (mode === "failed") {
+                    // 失败是「需要人看一眼」的状态，和 待翻译/已译 互斥 —— 否则一篇
+                    // 翻车了的文献会同时带着「双语已译」和「翻译失败」，两种结论并存。
+                    if (hasDone) {
+                        item.removeTag(TAG_DONE);
+                        changed = true;
+                    }
+                    if (!hasFailed) {
+                        item.addTag(TAG_FAILED);
                         changed = true;
                     }
                 } else {
@@ -704,9 +754,11 @@
     // fallback: a machine where LitFlow is not running must still translate,
     // and a plugin that silently stops working because a service is down is
     // worse than one that degrades to the old path.
+    // 只剩一个后端了（脚本后端已删）。保留这个函数是因为 prefs 里可能还留着旧值
+    // "script"：读到它也只当 litflow —— 否则升级后那个旧值会让插件找不到任何可用
+    // 后端，表现为彻底静默不翻译，而用户看不出是配置残留。
     function configuredBackend() {
-        var value = String(getPref(BACKEND_PREF, DEFAULT_BACKEND) || "").toLowerCase();
-        return value === "script" ? "script" : "litflow";
+        return "litflow";
     }
 
     function litflowBase() {
@@ -760,36 +812,43 @@
 
     // The backend actually in use for this drain, decided once so a service
     // that dies mid-queue is reported rather than re-probed per item.
+    //
+    // 这里曾经有一个「脚本后端」回退：LitFlow 不答时改跑
+    // D:\zotero-tools\pdf2zh\batch_translate_live.py。那是这个插件当主力的年代
+    // 留下的第二套实现，现在它是**死路**：
+    //
+    //   · 那个脚本的 llm_base_url 指向 http://127.0.0.1:8787/v1，也就是已经被
+    //     本网关取代、早已退役的旧面板；8787 上什么都没有；
+    //   · 它绕过整个网关 —— 没有账号池、没有轮换、没有限流冷却、没有队列、
+    //     没有术语表。就算它能跑，产出的可靠性也和网关不是一回事；
+    //   · 失败时**只写一行日志**，用户在 Zotero 里看到的是「点了没反应」。
+    //
+    // 一条永远跑不通、又只把错误吞进日志的回退，比一个明确的报错更糟：它让
+    // 故障看起来像沉默。所以现在只有一条路径，LitFlow 不在就如实说。
     function resolveBackend() {
-        if (configuredBackend() === "script") {
-            return Promise.resolve({ kind: "script" });
-        }
         var base = litflowBase();
         var waited = 0;
         var stepMs = 1500;
         var budgetMs = 60000;
 
         // A service that is up but still loading its catalogue is USABLE, just
-        // not yet — so wait rather than falling back. Falling back here would
-        // mean the first translation after every restart goes down the old
-        // path for no reason, which is exactly the kind of "it works on the
-        // second try" flakiness this project keeps trying to remove.
+        // not yet — so wait rather than giving up. Giving up here would mean the
+        // first translation after every restart fails for no reason, which is
+        // exactly the kind of "it works on the second try" flakiness this
+        // project keeps trying to remove.
         function waitReady() {
             return litflowProbe().then(function (probe) {
                 if (!probe.up) {
-                    log(
-                        "auto-translate: LitFlow not answering at " + base +
-                            " - falling back to the script backend",
-                    );
-                    return { kind: "script" };
+                    log("auto-translate: LitFlow not answering at " + base);
+                    return { kind: "unavailable", reason: "litflow-down", base: base };
                 }
                 if (probe.ready) return { kind: "litflow", base: base };
                 if (waited >= budgetMs) {
                     log(
                         "auto-translate: LitFlow is up but still not ready after " +
-                            Math.round(waited / 1000) + "s - falling back to script",
+                            Math.round(waited / 1000) + "s",
                     );
-                    return { kind: "script" };
+                    return { kind: "unavailable", reason: "litflow-not-ready", base: base };
                 }
                 waited += stepMs;
                 return Zotero.Promise.delay(stepMs).then(waitReady);
@@ -892,15 +951,6 @@
         return step();
     }
 
-    function translatePaths() {
-        var py = String(getPref(PYTHON_PREF, DEFAULT_PYTHON) || "");
-        var script = String(getPref(SCRIPT_PREF, DEFAULT_SCRIPT) || "");
-        var pf = py ? toFile(py) : null;
-        var sf = script ? toFile(script) : null;
-        if (!pf || !pf.exists()) return { error: "python not found: " + py };
-        if (!sf || !sf.exists()) return { error: "translation script not found: " + script };
-        return { python: pf, script: sf };
-    }
 
     // the attachment whose storage folder holds the source PDF
     function findOriginalAttachment(parent) {
@@ -933,26 +983,10 @@
             });
     }
 
-    function runTranslation(backend, paths, key, sourcePath) {
-        if (backend && backend.kind === "litflow") {
-            return litflowSubmit(backend, sourcePath, key);
-        }
-        log("auto-translate: exec python --only " + key);
-        return Promise.resolve()
-            .then(function () {
-                return Zotero.Utilities.Internal.exec(paths.python, [
-                    paths.script.path,
-                    "--only",
-                    key,
-                ]);
-            })
-            .then(function () {
-                return true;
-            })
-            .catch(function (e) {
-                log("auto-translate: " + key + " FAILED: " + e);
-                return false;
-            });
+    // 只有一条路径：LitFlow。第二个「脚本后端」已经删掉（见 resolveBackend 的说明）——
+    // 它指向的旧面板早已退役，留着只会把失败吞进日志。
+    function runTranslation(backend, key, sourcePath) {
+        return litflowSubmit(backend, sourcePath, key);
     }
 
     // BUG in 1.0.7: every sync called autoTranslatePending(), and each call
@@ -997,23 +1031,22 @@
         // service for every PDF would add a round trip each time, and a service
         // that dies mid-queue should be reported rather than silently retried.
         resolveBackend().then(function (backend) {
-            var paths = null;
-            if (backend.kind === "script") {
-                paths = translatePaths();
-                if (paths.error) {
-                    log("auto-translate unavailable: " + paths.error);
-                    _draining = false;
-                    return;
-                }
+            if (backend.kind !== "litflow") {
+                // 后端不可用 —— 这一次刷队列什么也做不了。标记待办条目并复位，
+                // 否则 _draining 会一直卡在 true，之后所有翻译请求都被静默吞掉。
+                markPendingFailed(backend.reason);
+                _draining = false;
+                return;
             }
-            drainWith(backend, paths, force);
+            drainWith(backend, force);
         }).catch(function (e) {
             log("auto-translate: backend resolution failed: " + e);
+            markPendingFailed("backend-error");
             _draining = false;
         });
     }
 
-    function drainWith(backend, paths, force) {
+    function drainWith(backend, force) {
         var budget = force ? Infinity : parseInt(getPref(TRANSLATE_MAX_PREF, 3), 10);
         if (!force && (isNaN(budget) || budget < 0)) budget = 3;
 
@@ -1120,7 +1153,7 @@
                             (budget === Infinity ? "" : "/" + budget) + ") " +
                             itemTitle(item).slice(0, 46),
                     );
-                    return runTranslation(backend, paths, key, sourcePath).then(function (ok) {
+                    return runTranslation(backend, key, sourcePath).then(function (ok) {
                         delete _translating[key];
                         log("auto-translate: DONE " + key + " ok=" + ok + " - syncing");
                         // the dual is on disk now; attach + tag it immediately
@@ -1132,7 +1165,7 @@
                 log("auto-translate: item " + id + " error: " + e);
             })
             .then(function () {
-                drainWith(backend, paths, force); // strictly one job at a time
+                drainWith(backend, force); // strictly one job at a time
             });
     }
 
