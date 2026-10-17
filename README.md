@@ -220,30 +220,22 @@ flowchart LR
 - 一个或多个已注册的 CodeBuddy 账号，用于 OAuth 登录
 - 宿主机 Go ≥ 1.22（仅从源码构建时需要）
 
-### 方式〇：GHCR 镜像（免克隆免构建）
+### 方式〇：自己构建镜像（本仓库不发布预构建镜像）
 
-CI 会自动构建多架构镜像（`amd64` / `arm64`）并发布到 GHCR，`git clone` 之外的部署路径：
+> 这一段原来介绍的是直接拉 GHCR 上的预构建镜像。**镜像已停止发布**（`.github/workflows/docker-ghcr.yml`
+> 已删除），所以下面这条路走不通了，改用「方式一：Docker Compose」。
+>
+> 为什么停掉：这是一个本机跑的工具，镜像主要是服务器部署路径，而我们既不打算维护它、
+> 也没有在用它。**发布一个不打算支持的产物，等于对外做了一个承诺。**
+>
+> 历史推送的镜像可能仍留在 ghcr.io 上（`leobba/litflow` 的 Packages 里），
+> 需要的话到仓库页 → Packages → 选中包 → Package settings → Delete 手动删掉。
+
+`Dockerfile` 与 `docker-compose.yml` 都还在仓库里，本地构建照常：
 
 ```bash
-# 1. 准备配置与数据目录
-mkdir -p auths data && cp config.example.json config.json
-#    建议编辑 config.json 设置 api_key（或留空由程序自动生成随机密钥）
-
-# 2. 拉取并运行
-docker run -d --name workbuddy2api \
-  -p 7863:7863 -e TZ=Asia/Shanghai \
-  -v ./auths:/app/auths -v ./data:/app/data -v ./config.json:/app/config.json \
-  ghcr.io/linguo2625469/workbuddy2api-panel:latest
-
-# 3. 健康检查（无可用账号时返回 503）
-curl -s http://localhost:7863/healthz
+docker compose up -d --build
 ```
-
-> **首次发布后须将包设为公开**：GitHub 仓库页 → Packages → `workbuddy2api-panel` →
-> Package settings → Change visibility → Public，否则拉取需要 `docker login ghcr.io`。
->
-> 镜像 tag 规则：`main` 分支推送 `latest` / `main` / `sha-xxxxxx`；打 `v*` tag 额外发布
-> `1.2.3` / `1.2` / `1` 语义化版本；PR 仅构建验证、不推送。
 
 ### 方式一：Docker Compose（推荐服务器部署）
 
