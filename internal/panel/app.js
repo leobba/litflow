@@ -3171,3 +3171,70 @@ document.addEventListener('DOMContentLoaded', () => {
     file.onchange = () => { if (file.files && file.files[0]) uploadTranslate(file.files[0]); };
   }
 });
+
+/* ===== Zotero 集成卡片 =====
+
+   目的只有一个：把「装插件」从一串手工步骤变成两次点击。
+   面板能确认的只有两件事——Zotero 进程在不在，以及我们手上有没有可装的 xpi。
+   把这两件如实显示，比编一个「已连接」诚实：用户装没装插件我们并不知道，
+   而一个假装知道的界面会让真正的失败无从下手。 */
+
+async function refreshZotero() {
+  const state = $('ztState'), hint = $('ztHint'), gate = $('ztGate');
+  if (!state) return;
+  try {
+    const d = await api('zotero/status');
+    const running = !!d.zotero_running, has = !!d.plugin_present;
+    gate.textContent = '网关地址 ' + (d.gateway_url || '');
+    state.textContent = (running ? '● Zotero 运行中' : '○ Zotero 未运行')
+      + ' · ' + (has ? '插件包已就绪' : '插件包缺失');
+    state.style.color = (running && has) ? '#1a7f37' : (running ? '#9a6700' : '#57606a');
+    hint.textContent = d.hint || '';
+    const btn = $('btnZtDownload');
+    if (btn) btn.disabled = !has;
+  } catch (e) {
+    state.textContent = '读取失败：' + e.message;
+    state.style.color = '#cf222e';
+  }
+}
+
+/* 下载必须带鉴权头，所以不能用 <a href> —— 那个发不出 Bearer。
+   用 fetch + blob 再触发一次本地下载，行为对用户是一样的。 */
+async function downloadZoteroPlugin() {
+  const btn = $('btnZtDownload');
+  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  try {
+    const h = {};
+    const k = localStorage.getItem(LS_KEY);
+    if (k) h['Authorization'] = 'Bearer ' + k;
+    const r = await fetch('/panel/api/zotero/plugin', { headers: h });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || ('HTTP ' + r.status));
+    }
+    const blob = await r.blob();
+    // 文件名从 Content-Disposition 取，取不到就用一个安全的默认值。
+    let name = 'dualsync@zotero.local.xpi';
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = /filename="([^"]+)"/.exec(cd);
+    if (m) name = m[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('已下载 ' + name + ' —— 到 Zotero 里安装后重启它');
+  } catch (e) {
+    toast('下载失败：' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '下载插件'; }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const b = $('btnZtDownload'); if (b) b.onclick = downloadZoteroPlugin;
+  const rf = $('btnZtRefresh'); if (rf) rf.onclick = refreshZotero;
+});
