@@ -50,3 +50,8 @@ wb2api.exe
 *.exe
 *.err
 *.log
+.litflow-supervisor.pid
+.litflow-gateway.pid
+litflow-supervisor.log
+litflow.log
+litflow.err
