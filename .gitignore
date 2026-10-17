@@ -48,3 +48,5 @@ server.exe
 wb2api.exe
 wb*.log
 wb*.err
+*~
+*.exe
