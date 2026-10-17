@@ -450,6 +450,62 @@ func TestEveryJobStateHasAnAction(t *testing.T) {
 	}
 }
 
+// TestEveryClassNameHasStyling HTML 里用到的每个 class 都必须在内联样式表里
+// 至少有一条规则。
+//
+// 这条守的是一个**真实存在过、而且没人发现**的问题：翻译页的队列表写的是
+// `class="tbl"`，而整份样式表里 `.tbl` 一条规则都没有（只有 `.tbl-wrap`）——
+// 于是那张表一直是浏览器默认样式，紧贴、无分隔、数字不对齐。没有任何报错，
+// 也拦不住任何测试，因为一个**完全不生效的 class 与一个生效的 class 在源码里
+// 长得一模一样**。
+//
+// 顺带也守住了这个仓库反复踩的另一个形态：改了 class 名却没改 CSS（或反过来）。
+//
+// 边界：只查内联 `<style>` 块。这个项目的前端是 go:embed 的单文件、没有任何
+// 外部样式表（外链本身有别的断言在挡），所以内联块就是全部样式。
+func TestEveryClassNameHasStyling(t *testing.T) {
+	html := srcHTML()
+
+	styleStart := strings.Index(html, "<style>")
+	styleEnd := strings.Index(html, "</style>")
+	if styleStart < 0 || styleEnd <= styleStart {
+		t.Fatal("找不到内联 <style> 块")
+	}
+	css := html[styleStart:styleEnd]
+	body := html[styleEnd:]
+
+	usedSet := map[string]bool{}
+	for _, m := range regexp.MustCompile(`class="([^"]*)"`).FindAllStringSubmatch(body, -1) {
+		for _, c := range strings.Fields(m[1]) {
+			usedSet[c] = true
+		}
+	}
+	if len(usedSet) < 50 {
+		t.Fatalf("只解析出 %d 个 class，解析可能失效了（预期 100 上下）", len(usedSet))
+	}
+
+	// CSS 里的 class 选择器：`.name`（排除属性选择器里的点之类，简单起见只认
+	// 点后跟合法标识符）。这段正则也覆盖 `.a .b` / `.a:hover` 这类复合选择器。
+	definedSet := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\.([A-Za-z][\w-]*)`).FindAllStringSubmatch(css, -1) {
+		definedSet[m[1]] = true
+	}
+
+	var missing []string
+	for c := range usedSet {
+		if !definedSet[c] {
+			missing = append(missing, c)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("%d 个 class 在 HTML 里用了，但样式表里没有任何规则 —— "+
+			"它们不会报错，只会让那部分界面按浏览器默认样式渲染："+
+			"（历史上 `.tbl` 就是这么让翻译队列表裸奔的）\n  %s",
+			len(missing), strings.Join(missing, "\n  "))
+	}
+}
+
 func TestNoInlineEventHandlers(t *testing.T) {
 	// **先剥掉 HTML 注释**：注释里出现这个属性的字面量是合法的（比如解释为什么
 	// 删掉了它），而朴素的子串搜索会把它当成真处理器。这条判断标准的变化本身

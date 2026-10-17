@@ -587,6 +587,93 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .exp-main .note { margin-top: 2px; font-size: 11px; color: var(--ink-3); }
   .exp-main.err { color: var(--bad); }
 
+  /* ── PDF 翻译页 ────────────────────────────────────────────────────
+     用户说这页「太丑」。翻样式表后发现根因不是配色，而是**这一页要用的三组样式
+     根本没定义**：
+       · 队列表写的是 class="tbl"，而样式表里只有 .tbl-wrap —— 于是它一直是一张
+         浏览器默认表格：表头没有样式、单元格没有内边距、行距贴着字；
+       · 三条状态说明用的是 .note / .hint，而这两条只在 .box>header 和 label.fld
+         里定义过，落到这里就是普通正文 —— 和周围的字一样重、一样色，读起来是一坨；
+       · 统计色的选择器是 .stat.good .v（状态类要挂在 .stat 上），而 app.js 把
+         'v good' 写在数值元素上，所以「失败」那个数字永远是黑的。
+     下面用 tr- 前缀重建这一页的骨架（概要卡 → 标签/值行 → 队列表）。
+     前缀同时是一条边界：不与账号池的 .acc、用量页的 .kpi 互相越界。 */
+
+  /* 概要卡直接复用用量页的 .kpi（左侧 3px 色轨 + 等宽大数字）。
+     为什么放最上面：这一页唯一回答「还要等多久」的信息就是这四个数，
+     而它们原先被夹在输入框和大表之间，是最容易被划过去的位置。 */
+  #view-translate .tr-kpis {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px; margin-bottom: 18px;
+  }
+  @media (max-width: 900px) { #view-translate .tr-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  /* 标签 / 值行：旧版（_oldui TranslatePage）的排版主力 —— 每一项先有名字再看值。
+     不挤成一条 flex，是因为窄窗口下「路径 + 模型 + 策略 + 两个按钮」会连成一坨，
+     连哪个控件对应哪件事都分不出来。 */
+  #view-translate .tr-row {
+    display: grid; grid-template-columns: 92px minmax(0, 1fr);
+    gap: 12px; align-items: center; padding: 9px 0;
+  }
+  #view-translate .tr-row + .tr-row { border-top: 1px solid var(--line-soft); }
+  @media (max-width: 640px) { #view-translate .tr-row { grid-template-columns: minmax(0, 1fr); gap: 5px; } }
+  #view-translate .tr-lb { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+  #view-translate .tr-val { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
+  /* 全局 input/select 是 width:100%（配置表单要占满整行），这里必须收回，
+     否则路径框会把同行的「选择文件…」挤到下一行去。 */
+  #view-translate .tr-val > input, #view-translate .tr-val > select { width: auto; }
+  #view-translate .tr-val > input.tr-path {
+    flex: 1 1 320px; min-width: 200px; font-family: var(--mono); font-size: 12.5px;
+  }
+  #view-translate .tr-val > select { flex: 0 1 auto; max-width: 100%; }
+  /* 值本身是一段话的行（轮换链 / 术语表 / 引擎 / Zotero 提示）：块级排版，
+     让它自然换行 —— 这些句子里「该怎么办」那一半就藏在后半截，截断等于没给。 */
+  #view-translate .tr-val.tr-text { display: block; font-size: 12.5px; line-height: 1.65; color: var(--ink-2); }
+  #view-translate .tr-note { color: var(--ink-3); font-size: 11.5px; }
+  #view-translate .tr-actions {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding-top: 15px; border-top: 1px solid var(--line-soft);
+  }
+  /* 运行环境独立成段（自己带一条上边框），因为这三项和「填路径」不是一回事：
+     它们是「这一页现在到底能不能干活」的前提。 */
+  #view-translate .tr-env { padding: 0 17px 14px; border-top: 1px solid var(--line-soft); }
+  #view-translate .tr-env-hd { padding: 12px 0 2px; font-size: 11.5px; font-weight: 600; color: var(--ink-3); }
+  #view-translate .tr-foot {
+    padding: 10px 17px 12px; border-top: 1px solid var(--line-soft);
+    color: var(--ink-3); font-size: 11.5px; line-height: 1.7;
+  }
+  #view-translate .box > header { flex-wrap: wrap; }
+
+  /* 队列表。列宽写在 <th> 上：文件名长度差别很大，不固定的话每次轮询因签名变化
+     重写整表时，列会左右跳一下。 */
+  #view-translate .tr-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #view-translate .tr-tbl th {
+    text-align: left; font-weight: 500; font-size: 11.5px; color: var(--ink-3);
+    padding: 9px 11px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  #view-translate .tr-tbl td {
+    padding: 10px 11px; border-bottom: 1px solid var(--line-soft); vertical-align: top;
+  }
+  #view-translate .tr-tbl tbody tr:last-child td { border-bottom: none; }
+  #view-translate .tr-tbl tbody tr:hover { background: var(--surface-2); }
+  /* 行首色轨：状态类 app.js 本来就写在 <tr class="…"> 上（produced_nothing /
+     partial 也已归到 failed），所以不必再加一列就能一眼分出「在跑 / 在等 / 坏了」。
+     先铺一层透明占位，避免着色前后整行左右位移一格。 */
+  #view-translate .tr-tbl tbody td:first-child { border-left: 3px solid transparent; }
+  #view-translate .tr-tbl tbody tr.running td:first-child { border-left-color: var(--accent); }
+  #view-translate .tr-tbl tbody tr.queued td:first-child { border-left-color: var(--warn); }
+  #view-translate .tr-tbl tbody tr.done td:first-child { border-left-color: var(--ok); }
+  #view-translate .tr-tbl tbody tr.failed td:first-child { border-left-color: var(--bad); }
+  #view-translate .tr-tbl tbody tr.skipped td:first-child,
+  #view-translate .tr-tbl tbody tr.cancelled td:first-child { border-left-color: var(--line); }
+  /* 说明列里的第二段（app.js 用 class="note" 包错误建议）。header 里的 .note 是
+     nowrap，这里必须可换行 —— 被截掉的那半截正是「该怎么办」。 */
+  #view-translate .tr-tbl td .note { color: var(--ink-3); font-size: 11.5px; }
+  /* Zotero 状态行：.state.ok/.err 已有全局定义，这里补 warn/mute 两档 ——
+     「装了但没启用」「没装」都不是错误，但必须和「已启用」分开看。 */
+  #view-translate .state.warn { color: var(--warn); }
+  #view-translate .state.mute { color: var(--ink-3); }
+
 </style>
 </head>
 <body>
@@ -735,60 +822,112 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       </div>
     </section>
 
-    <!-- 模型与档位 -->
+    <!-- PDF 翻译
+         版面顺序按「打开这一页想知道什么」排：队列忙不忙 → 怎么加一篇 → 每篇到哪一步 → 插件装没装。
+         （这段注释此前写的是「模型与档位」，和它标注的 section 根本不是一回事。） -->
     <section class="view" id="view-translate" hidden>
+      <!-- 概要卡：四个数字回答同一个问题 —— 还要等多久才轮到我。
+           色轨与数字颜色由 app.js 写在这四张卡的 class 上（c-ok/c-warn/c-bad）。 -->
+      <div class="tr-kpis">
+        <div class="kpi c-mute">
+          <div class="k">运行中</div>
+          <div class="v" id="trStatRun">—</div>
+          <div class="s">pdf2zh 正在翻译这一篇</div>
+        </div>
+        <div class="kpi c-mute">
+          <div class="k">排队</div>
+          <div class="v" id="trStatQueued">—</div>
+          <div class="s">串行队列：等前一篇结束</div>
+        </div>
+        <div class="kpi c-mute">
+          <div class="k">已完成</div>
+          <div class="v" id="trStatDone">—</div>
+          <div class="s">产出双语 PDF 的任务数</div>
+        </div>
+        <div class="kpi c-mute">
+          <div class="k">失败</div>
+          <div class="v" id="trStatFailed">—</div>
+          <div class="s">每一行都能就地重试</div>
+        </div>
+      </div>
+
+      <!-- 新建任务：主操作与它的两个选项各占一行，标签在左、值和说明在右。 -->
       <div class="box">
         <header>
-          <h3>翻译论文</h3>
+          <h3>新建翻译任务 <span class="hint">本机 PDF 绝对路径，或本地选一个文件</span></h3>
+        </header>
+        <div class="pad">
+          <div class="tr-row">
+            <label class="tr-lb" for="trPath">PDF 路径</label>
+            <div class="tr-val">
+              <input id="trPath" type="text" class="tr-path" aria-label="PDF 绝对路径"
+                     placeholder="例如 D:\papers\paper.pdf">
+              <button id="btnTrPick" type="button">选择文件…</button>
+              <input id="trFile" type="file" accept="application/pdf" style="display:none">
+            </div>
+          </div>
+          <div class="tr-row">
+            <label class="tr-lb" for="trModel">翻译模型</label>
+            <div class="tr-val">
+              <select id="trModel" aria-label="翻译模型"></select>
+              <span class="tr-note">改选即存为默认 —— Zotero 插件提交时也用它</span>
+            </div>
+          </div>
+          <div class="tr-row">
+            <label class="tr-lb" for="trSkip">已有译文</label>
+            <div class="tr-val">
+              <select id="trSkip" aria-label="已有译文">
+                <option value="1">已有译文则跳过</option>
+                <option value="0">强制重译</option>
+              </select>
+              <span class="tr-note">指磁盘上已有同名双语 PDF 时怎么办</span>
+            </div>
+          </div>
+          <div class="tr-actions">
+            <button class="primary" id="btnTrSubmit">提交翻译</button>
+            <span class="tr-note">串行队列 —— 一次只跑一篇（两个 BabelDOC 进程各约 1.8&nbsp;GB，并发会变成 swap 风暴）</span>
+          </div>
+        </div>
+
+        <!-- 运行环境：这三项任何一项缺失都不会在提交时立刻报错，只会静默失效或推迟到
+             第一次翻译才暴露，所以必须和提交按钮在同一屏。 -->
+        <div class="tr-env">
+          <div class="tr-env-hd">运行环境</div>
+          <div class="tr-row">
+            <div class="tr-lb">模型轮换链</div>
+            <div class="tr-val tr-text" id="trChainNote">读取中…</div>
+          </div>
+          <!-- 术语表配错只会被忽略而不阻断翻译：不在这里显出来，「配了未生效」和
+               「配了且生效」在界面上长得一模一样。 -->
+          <div class="tr-row">
+            <div class="tr-lb">术语表</div>
+            <div class="tr-val tr-text" id="trGlossary">未配置</div>
+          </div>
+          <!-- pdf2zh 引擎状态：新装用户最容易卡的一步，而失败原本要等到第一次提交才暴露。 -->
+          <div class="tr-row">
+            <div class="tr-lb">翻译引擎</div>
+            <div class="tr-val tr-text" id="trEngine">检测中…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 翻译队列 -->
+      <div class="box">
+        <header>
+          <h3>翻译队列 <span class="hint">串行执行 · 一次一篇</span></h3>
           <span class="grow"></span>
-          <span class="note" id="trChainNote"></span>
           <span class="note" id="trNote">—</span>
           <button class="xs" id="btnTrRefresh">刷新</button>
         </header>
-
-        <!-- 提交区：主操作放最上面，输入框占满一行，按钮成组靠右 -->
-        <div class="pad" style="padding-bottom:12px">
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <input id="trPath" type="text" style="flex:1;min-width:260px"
-                   placeholder="本机 PDF 的绝对路径，例如 D:\\papers\\paper.pdf">
-            <select id="trModel" aria-label="翻译模型" style="width:auto"></select>
-            <select id="trSkip" aria-label="已有译文" style="width:auto">
-              <option value="1">已有译文则跳过</option>
-              <option value="0">强制重译</option>
-            </select>
-            <button class="xs primary" id="btnTrSubmit">提交翻译</button>
-            <button class="xs" id="btnTrPick" type="button">选择文件…</button>
-            <input id="trFile" type="file" accept="application/pdf" style="display:none">
-          </div>
-          <div class="note" style="margin-top:9px;line-height:1.7">
-            串行队列 —— 一次只跑一篇（两个 BabelDOC 进程各约 1.8&nbsp;GB，并发会变成 swap 风暴）。
-            这里不显示百分比：pdf2zh 在管线下不吐阶段条，编一个会动的进度条就是撒谎，所以只报已用时和 pdf2zh 自己报的 token 总量。
-          </div>
-          <!-- 术语表状态。必需显示的理由：术语表配错只会被忽略而不阻断翻译，
-               所以「配了未生效」和「配了且生效」在别处长得一模一样。 -->
-          <div class="note" id="trGlossary" style="margin-top:7px;line-height:1.7">术语表：未配置</div>
-          <!-- pdf2zh 引擎状态。新装用户最容易卡的一步，而失败原本要等到第一次
-               提交才暴露 —— 提前一句话省掉一整轮。 -->
-          <div class="note" id="trEngine" style="margin-top:5px;line-height:1.7">翻译引擎：检测中…</div>
-        </div>
-
-        <!-- 队列统计：一眼看到「在跑几个、排队几个」 -->
-        <div style="display:flex;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)">
-          <div class="stat" style="flex:1"><div class="v" id="trStatRun">—</div><div class="k">运行中</div></div>
-          <div class="stat" style="flex:1"><div class="v" id="trStatQueued">—</div><div class="k">排队</div></div>
-          <div class="stat" style="flex:1"><div class="v" id="trStatDone">—</div><div class="k">已完成</div></div>
-          <div class="stat" style="flex:1"><div class="v" id="trStatFailed">—</div><div class="k">失败</div></div>
-        </div>
-
         <div class="tbl-wrap">
-          <table class="tbl" id="trTbl">
+          <table class="tr-tbl" id="trTbl">
             <thead><tr>
               <th style="min-width:230px">文件</th>
               <th style="width:96px">状态</th>
               <th style="width:110px">用时</th>
               <th style="width:88px">token</th>
-              <th style="min-width:260px">说明</th>
-              <th style="width:104px"></th>
+              <th style="min-width:280px">说明</th>
+              <th style="width:152px"></th>
             </tr></thead>
             <tbody id="trBody">
               <tr><td colspan="6"><div class="empty">
@@ -798,6 +937,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               </div></td></tr>
             </tbody>
           </table>
+        </div>
+        <div class="tr-foot">
+          这里不显示百分比：pdf2zh 在管线下不吐阶段条，编一个会动的进度条就是撒谎，
+          所以只报已用时和 pdf2zh 自己报的 token 总量。
         </div>
       </div>
 
@@ -810,12 +953,19 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnZtRefresh">重新检测</button>
           <button class="xs primary" id="btnZtDownload">下载插件</button>
         </header>
-        <div class="pad" style="padding-top:13px;padding-bottom:13px">
-          <div style="font-size:13px" id="ztState">检测中…</div>
-          <div class="note" id="ztHint" style="margin-top:7px;line-height:1.7"></div>
+        <div class="pad">
+          <div class="tr-row">
+            <div class="tr-lb">插件状态</div>
+            <div class="tr-val"><span class="state" id="ztState">检测中…</span></div>
+          </div>
+          <div class="tr-row">
+            <div class="tr-lb">下一步</div>
+            <div class="tr-val tr-text" id="ztHint"></div>
+          </div>
         </div>
       </div>
-    </section>    <section class="view" id="view-models" hidden>
+    </section>
+    <section class="view" id="view-models" hidden>
       <div class="box">
         <header>
           <h3>模型能力 <span class="hint">max_tokens bug已修复目前可以正常透传最大输出,但是官方返回的最大输出仅为参考，不保证完全正确

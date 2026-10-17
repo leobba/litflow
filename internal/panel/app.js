@@ -3298,11 +3298,19 @@ async function refreshTranslate() {
   // 队列统计条。用户说「翻译进度什么的也没有了」—— 单看每一行的 elapsed 无法
   // 知道「还有几个在等」，这四个数字回答的就是那个问题。
   // 仍然不给百分比：pdf2zh 管线下不吐阶段信息，百分比只能是编的。
+  /* 状态色写两处：数值元素（旧写法）与卡片本身。
+     为什么：色轨和数字颜色都定义在卡片上（.kpi.c-ok .v，账号池的 .stat.good .v
+     同理），而这里原来只写数值元素 —— 选择器要的是状态类挂在 .stat 上，
+     所以「失败」那个数字在界面上从来是黑的，没人看得出来。 */
+  const KPI_TONE = { good: 'c-ok', warn: 'c-warn', bad: 'c-bad' };
   const stat = (id, v, cls) => {
     const el = $(id);
     if (!el) return;
     el.textContent = v;
-    if (cls !== undefined) el.className = 'v' + (cls ? ' ' + cls : '');
+    if (cls === undefined) return;
+    el.className = 'v' + (cls ? ' ' + cls : '');
+    const card = el.closest && el.closest('.kpi');
+    if (card) card.className = 'kpi ' + (KPI_TONE[cls] || 'c-mute');
   };
   stat('trStatRun', c.running || 0, (c.running || 0) > 0 ? 'good' : '');
   stat('trStatQueued', c.queued || 0, (c.queued || 0) > 0 ? 'warn' : '');
@@ -3313,28 +3321,32 @@ async function refreshTranslate() {
   const chainNote = $('trChainNote');
   if (chainNote) {
     const chain = d.chain || [];
+    // 「轮换链」这三个字现在由左边的标签承担，值里再写一遍会读成
+    //「模型轮换链：轮换链：a → b」。
     chainNote.textContent = chain.length
-      ? '轮换链：' + chain.join(' → ')
-      : '未配置轮换链（translate.chain）—— 模型被限流时会一直重试它';
+      ? chain.join(' → ')
+      : '未配置（config.json 的 translate.chain）—— 模型被限流时会一直重试它';
   }
   // 术语表状态。三种状态必须可区分：没配 / 配了且生效 / 配了但不可用。
   // 第三种最危险 —— 它静默不生效，用户会一直以为术语在起作用。
   if ($('trGlossary')) {
 	const gl = d.glossaries || [];
 	if (!gl.length) {
-		$('trGlossary').textContent = '术语表：未配置（config.json 的 translate.glossaries）';
+		// 「术语表」三个字现在是页面上的标签，值里再写一遍就成了「术语表：术语表：…」。
+		$('trGlossary').textContent = '未配置（config.json 的 translate.glossaries）';
 		$('trGlossary').style.color = '';
 	} else {
 		const good = gl.filter(g => g.ok);
 		const bad = gl.filter(g => !g.ok);
 		const total = good.reduce((n, g) => n + (g.terms || 0), 0);
-		let txt = `术语表：${good.length} 份生效，共 ${total} 条词条`;
+		let txt = `${good.length} 份生效，共 ${total} 条词条`;
 		if (bad.length) {
 			txt += ` · ${bad.length} 份不可用：` +
 				bad.map(g => pathBase(g.path) + '（' + (g.error || '未知') + '）').join('、');
 		}
 		$('trGlossary').textContent = txt;
-		$('trGlossary').style.color = bad.length ? '#c0392b' : '';
+		// 用主题令牌而不是写死的 #c0392b：那个红是按浅色底挑的，深色主题下几乎糊进背景。
+		$('trGlossary').style.color = bad.length ? 'var(--bad)' : '';
 	}
   }
   // pdf2zh 引擎状态。三种情况要分清：
@@ -3345,16 +3357,16 @@ async function refreshTranslate() {
 	const p2 = d.pdf2zh || {};
 	const el = $('trEngine');
 	if (d.configured === false) {
-		el.textContent = '翻译引擎：翻译功能未启用（config.json 的 translate.enabled）';
+		el.textContent = '翻译功能未启用（config.json 的 translate.enabled）';
 		el.style.color = '';
 	} else if (p2.ok) {
 		const how = p2.source === 'path' ? '从 PATH 找到' : '配置指定';
-		el.textContent = `翻译引擎：可用（${how}）· ${p2.path || ''}`;
+		el.textContent = `可用（${how}）· ${p2.path || ''}`;
 		el.style.color = '';
 	} else {
-		el.textContent = '翻译引擎：不可用 —— ' + (p2.error || '未知原因')
+		el.textContent = '不可用 —— ' + (p2.error || '未知原因')
 			+ '。安装：pip install pdf2zh-next，然后把路径写进 config.json 的 translate.pdf2zh_exe';
-		el.style.color = '#c0392b';
+		el.style.color = 'var(--bad)';
 	}
   }
   if ($('trNote')) {
@@ -3596,14 +3608,17 @@ async function refreshZotero() {
     parts.push(running ? 'Zotero 运行中' : 'Zotero 未运行');
     if (!has) parts.push('安装包缺失');
     state.textContent = parts.join(' · ');
-    state.style.color = (installed && active) ? '#1a7f37' : (installed ? '#9a6700' : '#57606a');
+    // 三档用 class 而不是写死的十六进制：原来的 #1a7f37 / #9a6700 / #57606a 是给
+    // 浅色底挑的，深色主题下它们糊在背景里，而这一段恰恰是用户唯一能看出
+    //「装了没启用」和「没装」区别的地方（两者的症状完全一样：菜单不在）。
+    state.className = 'state ' + (installed && active ? 'ok' : (installed ? 'warn' : 'mute'));
     hint.textContent = d.hint || '';
     const btn = $('btnZtDownload');
     // 装好了把按钮文案改掉：留着一个「下载插件」会让人以为还没装。
     if (btn) { btn.disabled = !has; btn.textContent = installed ? '重新下载插件' : '下载插件'; }
   } catch (e) {
     state.textContent = '读取失败：' + e.message;
-    state.style.color = '#cf222e';
+    state.className = 'state err';
   }
 }
 
