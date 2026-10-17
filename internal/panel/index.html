@@ -1323,7 +1323,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="hint">该网关已启用 api_key 鉴权，请输入 config.json 中的密钥。</div>
     </header>
     <div class="body">
-      <form style="display:contents" onsubmit="return false"><input type="password" id="keyInput" placeholder="api_key" autocomplete="off"></form>
+      <!-- 不用 <form> 包裹：它原本的唯一作用是用内联事件处理器挡回车，
+                 而本页 CSP 是 script-src 'self'（无 unsafe-inline），内联处理器会被直接
+                 拦掉 —— 那行从来没生效过，回车会真的提交并刷新，把刚输入的 key 丢掉。
+                 回车的处理在 app.js 里（keyInput 的 keydown → btnKey.click()）。 -->
+            <input type="password" id="keyInput" placeholder="api_key" autocomplete="off">
       <div class="state err" id="keyErr" hidden style="margin-top:10px">密钥不正确，请重试。</div>
     </div>
     <footer>
