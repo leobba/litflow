@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -155,6 +156,16 @@ func (q *Queue) restore() {
 	}
 }
 
+// saveMu 串行化写盘。
+//
+// 为什么必须要：saveAsync 每次调用都起一个 goroutine，而所有 goroutine 都写
+// **同一个** path+".tmp"。两个并发写各自 open(O_TRUNC) 同一个文件，内容会交错：
+// 轻则 rename 时报文件不存在，重则把两份快照拼成一份**语义上撕裂但 JSON 合法**的
+// 文件，然后原子 rename 把这份坏内容发布出去。下一次启动读它就是错的历史。
+//
+// 原子写防的是「写到一半崩溃」，防不住「两个自己同时写」—— 这是两件事。
+var saveMu sync.Mutex
+
 // save 把当前历史写到磁盘。
 //
 // 原子写：先写 .tmp 再 rename。直接覆盖的话，写到一半断电就会留下一个截断的
@@ -185,6 +196,9 @@ func (q *Queue) save() {
 	q.mu.Unlock()
 
 	// 锁外序列化与写盘：这些 IO 不该挡住 Submit/Cancel。
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
 	body, err := json.MarshalIndent(out, "", " ")
 	if err != nil {
 		log.Printf("[translate] 序列化历史失败: %v", err)

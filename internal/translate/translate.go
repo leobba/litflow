@@ -317,8 +317,17 @@ func (q *Queue) Submit(source, outputDir, model, qps string, skipExisting bool) 
 	if outputDir, err = filepath.Abs(outputDir); err != nil {
 		return nil, err
 	}
+	// 解析成**实际会用的**模型，而不是占位的 "auto"。
+	//
+	// 这里曾经写死 "auto"，于是 buildArgs 里读 DefaultModel 的分支永远走不到 ——
+	// 死代码。表现是：面板里选了 hy3、接口也返回 default_model=cn:hy3，
+	// 而插件提交的任务实际仍然打 auto。**两处都"正常"，中间的链路断了。**
+	// 顺带：job.Model 存的就是真正会用的模型，面板显示的和实际发出的一致。
 	if model == "" {
-		model = "auto"
+		model = q.cfg.DefaultModel
+		if model == "" {
+			model = "auto"
+		}
 	}
 	if qps == "" {
 		qps = q.cfg.QPS
