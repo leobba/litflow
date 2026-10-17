@@ -55,3 +55,5 @@ wb2api.exe
 litflow-supervisor.log
 litflow.log
 litflow.err
+build/
+upd/

@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero Dual Sync",
+  "version": "1.1.1",
+  "description": "Link dual (bilingual) PDFs and colour item tags. Translates via the LitFlow service, with the script backend kept as a fallback.",
+  "homepage_url": "http://127.0.0.1:7863/panel/",
+  "author": "local",
+  "icons": {
+    "48": "content/icons/favicon@0.5x.png",
+    "96": "content/icons/favicon.png"
+  },
+  "applications": {
+    "zotero": {
+      "id": "dualsync@zotero.local",
+      "update_url": "https://github.com/leobba/litflow/releases/download/release/update.json",
+      "strict_min_version": "7.0",
+      "strict_max_version": "11.*"
+    }
+  }
+}
