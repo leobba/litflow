@@ -161,11 +161,11 @@ func NewHandler(cfg Config) *Handler {
 	// 队列 API：面板与 Zotero 插件共用的唯一一套（见 queue_api.go）。
 	// 回环免 key、非回环要 key —— 插件不带 key，而一刀切免鉴权会把队列
 	// 暴露给整个局域网。
-	h.mux.HandleFunc("GET /health", h.health)
-	h.mux.HandleFunc("GET /translate", h.withQueueAuth(h.translateList))
-	h.mux.HandleFunc("POST /translate", h.withQueueAuth(h.translateSubmit))
-	h.mux.HandleFunc("GET /translate/{id}", h.withQueueAuth(h.translateGetRoute))
-	h.mux.HandleFunc("POST /translate/{id}/cancel", h.withQueueAuth(h.translateCancelRoute))
+	h.mux.HandleFunc("GET /health", h.withQueueLog(h.health))
+	h.mux.HandleFunc("GET /translate", h.withQueueLog(h.withQueueAuth(h.translateList)))
+	h.mux.HandleFunc("POST /translate", h.withQueueLog(h.withQueueAuth(h.translateSubmit)))
+	h.mux.HandleFunc("GET /translate/{id}", h.withQueueLog(h.withQueueAuth(h.translateGetRoute)))
+	h.mux.HandleFunc("POST /translate/{id}/cancel", h.withQueueLog(h.withQueueAuth(h.translateCancelRoute)))
 
 	// Zotero 集成：状态与插件下载。走 /panel/api 前缀是因为它们是面板的功能，
 	// 需要 api_key（与其它面板接口同口径）——插件自己不用这两个端点。

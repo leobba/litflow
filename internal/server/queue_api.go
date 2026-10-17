@@ -31,6 +31,7 @@ package server
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -74,6 +75,24 @@ func (h *Handler) withQueueAuth(next http.HandlerFunc) http.HandlerFunc {
 				"this endpoint is open to loopback only; from another host it requires the api_key")
 			return
 		}
+		next(w, r)
+	}
+}
+
+// withQueueLog 打印每一次队列端点调用。
+//
+// 为什么值得一行日志：插件的失败形态是「点了没反应」—— 而从网关这一侧看，
+//「插件根本没发请求」和「发了但被拒」是两个完全不同的故障，此前两者都只表现为
+//「队列里没有新任务」。有了这行，一眼分开，不用猜。
+//
+// UA 也打出来：Zotero 的请求 UA 是可辨认的固定串，与面板及测试流量区分得开。
+func (h *Handler) withQueueLog(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ua := r.Header.Get("User-Agent")
+		if len(ua) > 60 {
+			ua = ua[:60]
+		}
+		log.Printf("[queue] %s %s from %s ua=%q", r.Method, r.URL.Path, r.RemoteAddr, ua)
 		next(w, r)
 	}
 }
