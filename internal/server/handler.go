@@ -24,6 +24,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/translate"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
@@ -34,6 +35,11 @@ type Config struct {
 	Upstream  *upstream.Client
 	APIKey    string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
 	MaxRotate int    // 单请求最多换号次数，默认 3
+
+	// Translate PDF 翻译队列（nil = 该功能关闭，队列端点返回 501）。
+	Translate *translate.Queue
+	// TranslateWorkDir 上传与产出的落地目录。
+	TranslateWorkDir string
 
 	// TranslateChain 跨模型轮换链（翻译用）。
 	//
@@ -148,6 +154,15 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
+
+	// 队列 API：面板与 Zotero 插件共用的唯一一套（见 queue_api.go）。
+	// 回环免 key、非回环要 key —— 插件不带 key，而一刀切免鉴权会把队列
+	// 暴露给整个局域网。
+	h.mux.HandleFunc("GET /health", h.health)
+	h.mux.HandleFunc("GET /translate", h.withQueueAuth(h.translateList))
+	h.mux.HandleFunc("POST /translate", h.withQueueAuth(h.translateSubmit))
+	h.mux.HandleFunc("GET /translate/{id}", h.withQueueAuth(h.translateGetRoute))
+	h.mux.HandleFunc("POST /translate/{id}/cancel", h.withQueueAuth(h.translateCancelRoute))
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}
@@ -727,6 +742,23 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	chainIdx := 0
 	modelSwitches := 0
 
+	// **auto 的第一次尝试就是链的第一个成员**，不是它自己。
+	//
+	// 原本的写法让 auto 先原样出站，只有被阻塞才跳到 chain[1]，于是 chain[0]
+	// 被整个跳过；而 auto 本身是倍率浮动、行为不可预测的模型（实测同一段文字
+	// 它要 24 秒，链上第一个成员只要 6 秒）。auto 的语义本来就是「你来挑」，
+	// 第一次就用 chain[0] 才是兑现承诺——否则「配了链」在正常路径上完全不生效，
+	// 只在出故障时才生效，而正常路径才是绝大多数请求。
+	if len(chain) > 0 && (bareModel == "auto" || bareModel == "") {
+		// 链上的条目带 realm 前缀（面板显示的 id 就是 `cn:glm-5.3-flash`），
+		// 而**选号与上游都只认裸名**。直接赋给 bareModel 会让池子拿
+		// "cn:glm-5.3-flash" 去查模型冷却表，永远查不到，于是判定「每个账号
+		// 对该模型都冷却」→ 503。实测就是这样失败的（pdf2zh 报 unavailable
+		// on every account，而账号其实是好的）。
+		realm, bareModel = resolveModel(chain[0])
+		body = rewriteModel(body, bareModel)
+	}
+
 	// 上限：每个模型都允许 MaxRotate 次换号，否则切一次模型就把换号预算吃光。
 	maxIter := h.cfg.MaxRotate * (1 + len(chain))
 	if maxIter < h.cfg.MaxRotate {
@@ -806,7 +838,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				next := chain[chainIdx]
 				log.Printf("[server] model %q is model-blocked; switching to %q (chain %d/%d)",
 					bareModel, next, chainIdx+1, len(chain))
-				bareModel = next
+				// 与 auto 首次切换同一个理由：链上条目带 realm 前缀，
+				// 而池子与上游只认裸名，不解析就会「每个账号都冷却」。
+				realm, bareModel = resolveModel(next)
 				// **清空 tried**：换的是模型不是账号，同一个号对新模型完全可能可用。
 				// 不清会让轮换在第一轮就因为「所有号都试过」而空转。
 				tried = map[string]bool{}
