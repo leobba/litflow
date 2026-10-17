@@ -4,7 +4,13 @@
       "updates": [
         {
           "version": "1.1.1",
-          "update_link": "http://127.0.0.1:7863/panel/api/zotero/plugin"
+          "update_link": "https://github.com/leobba/litflow/releases/download/v1.13.0/dualsync@zotero.local.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0",
+              "strict_max_version": "11.*"
+            }
+          }
         }
       ]
     }
